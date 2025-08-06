@@ -42,6 +42,6 @@ class DesktopPet(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    pet = DesktopPet("pet.png")
+    pet = DesktopPet("pet_sjtu/pet.png")
     pet.show()
     sys.exit(app.exec_())
