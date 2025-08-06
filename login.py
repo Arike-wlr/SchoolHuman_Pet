@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QLabel,
                             QMessageBox)
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt
+from choose_pet import PetSelectionWindow
 
 class LoginWindow(QWidget):
     def __init__(self):
@@ -56,15 +57,22 @@ class LoginWindow(QWidget):
                 f.write(f'Account:{account}\n')
                 f.write(f'Username:{username}\n')
             QMessageBox.information(self, 'Success', f'Welcome,{username}')
+            window = PetSelectionWindow()
+            window.show()
+
 
 def if_login():
+    #就是检查有没有userinfo.txt文件
     file_name = "userinfo.txt"  # 目标文件名
     current_dir = os.getcwd()  # 获取当前路径
     file_path = os.path.join(current_dir, file_name)  # 拼接完整路径
 
-    if os.path.isfile(file_path):  # 检查是否为文件
-        pass #直接进入
+    if os.path.isfile(file_path):
+        app = QApplication(sys.argv)# 如果有，并且为文件
+        window = PetSelectionWindow()
+        window.show()
     else:
+        app = QApplication(sys.argv)
         window = LoginWindow()
         window.show()
 

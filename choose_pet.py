@@ -4,11 +4,21 @@ from PyQt5.QtWidgets import (QApplication, QListWidget, QListWidgetItem,
                              QLabel, QVBoxLayout, QWidget, QPushButton , QApplication , QMessageBox)
 from PyQt5.QtGui import QPixmap,QIcon,QFont
 from PyQt5.QtCore import Qt,QSize
+from show_pet import DesktopPet
 
 class PetSelectionWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.if_chosen()
+
+    def if_chosen(self):
+        with open("userinfo.txt","r",encoding="utf_8") as f:
+            lines=f.readlines()
+        if (len(lines)==2):
+            self.initUI()
+        elif(len(lines)==3):
+            self.ask_change_pet()
+            #(DoneTODO:询问是否要换宠物
 
     def initUI(self):
         self.setWindowTitle("Choose your desktop pet")
@@ -55,12 +65,31 @@ class PetSelectionWindow(QWidget):
             with open ("userinfo.txt","a",encoding='utf-8') as f:
                 f.write(f'Pet:{pet['name']}\n')
             QMessageBox.information(self, 'Success',f"You have chosen:{pet['name']}")
+            self.close()
+            pet = DesktopPet("pet_sjtu/pet.png")
+            pet.show()
         else:
             QMessageBox.warning(self, 'Warning',"Please choose a desktop pet first！" )
 
+    def ask_change_pet(self):
+        # 创建弹窗
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("Confirmation of Pet Replacement")
+        msg_box.setText("Are you sure you want to change your current pet?")
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setIcon(QMessageBox.Question)
+        # 显示弹窗并获取结果
+        response = msg_box.exec_()
+        if response == QMessageBox.Yes:
+            self.change_pet()
+        else:
+            pet = DesktopPet("pet_sjtu/pet.png")
+            pet.show()
+            #TODO:直接进入相应宠物的界面
+
     def change_pet(self):
         pass
-        #TODO：删去txt最后一行，再重新init
+        #(DoneTODO：删去txt最后一行，再重新init
 
         with open("userinfo.txt", 'r', encoding='utf-8') as file:
             lines = file.readlines()  # 读取所有行到列表
@@ -76,8 +105,6 @@ class PetSelectionWindow(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    font = QFont("SimSun", 12)  # 指定中文字体，但有0个作用（不会搞）
-    app.setFont(font)
     window = PetSelectionWindow()
     window.show()
     sys.exit(app.exec_())
