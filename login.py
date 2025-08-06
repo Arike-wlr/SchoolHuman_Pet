@@ -57,27 +57,24 @@ class LoginWindow(QWidget):
                 f.write(f'Account:{account}\n')
                 f.write(f'Username:{username}\n')
             QMessageBox.information(self, 'Success', f'Welcome,{username}')
-            window = PetSelectionWindow()
-            window.show()
+            self.new_window = PetSelectionWindow()  # 绑定到self（父对象）
+            self.new_window.show()
+            self.close()
 
 
-def if_login():
+def if_login(app):
     #就是检查有没有userinfo.txt文件
     file_name = "userinfo.txt"  # 目标文件名
-    current_dir = os.getcwd()  # 获取当前路径
-    file_path = os.path.join(current_dir, file_name)  # 拼接完整路径
-
-    if os.path.isfile(file_path):
-        app = QApplication(sys.argv)# 如果有，并且为文件
+    if os.path.isfile(file_name):
         window = PetSelectionWindow()
-        window.show()
     else:
-        app = QApplication(sys.argv)
         window = LoginWindow()
-        window.show()
+
+    window.show()
+    return window
 
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    if_login()
+    window=if_login(app)
     sys.exit(app.exec_())

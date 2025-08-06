@@ -65,9 +65,9 @@ class PetSelectionWindow(QWidget):
             with open ("userinfo.txt","a",encoding='utf-8') as f:
                 f.write(f'Pet:{pet['name']}\n')
             QMessageBox.information(self, 'Success',f"You have chosen:{pet['name']}")
+            self.pet = DesktopPet("pet_sjtu/pet.png")
+            self.pet.show()
             self.close()
-            pet = DesktopPet("pet_sjtu/pet.png")
-            pet.show()
         else:
             QMessageBox.warning(self, 'Warning',"Please choose a desktop pet first！" )
 
@@ -83,8 +83,9 @@ class PetSelectionWindow(QWidget):
         if response == QMessageBox.Yes:
             self.change_pet()
         else:
-            pet = DesktopPet("pet_sjtu/pet.png")
-            pet.show()
+            self.pet = DesktopPet("pet_sjtu/pet.png")
+            self.pet.show()
+            self.close()
             #TODO:直接进入相应宠物的界面
 
     def change_pet(self):
