@@ -76,5 +76,6 @@ def if_login(app):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window=if_login(app)
+    window=LoginWindow()
+    window.show()
     sys.exit(app.exec_())
