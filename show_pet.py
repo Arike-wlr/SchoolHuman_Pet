@@ -17,10 +17,13 @@ class DesktopPet(QWidget):
         self.initUI()
 
         self.dragging=False
+        self.is_dragging=False # 用于区分点击和拖动
+        self.drag_threshold = 5  # 拖动阈值（像素）
         self.drag_pos=QPoint(0, 0)
         self.rotation_angle = 0
         self.middle_dragging = False
         self.middle_drag_start = QPoint(0, 0)
+        self.dizzy_path=f"{self.pet_folder}/dizzy.png"
 
     def initUI(self):
         # 设置无边框和置顶
@@ -31,7 +34,7 @@ class DesktopPet(QWidget):
         self.label = QLabel(self)
         pixmap = QPixmap(self.pet_init)
 
-        scaled_pixmap = pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)  # 宽度和高度设为200px，保持比例
+        scaled_pixmap = pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)  # 宽度和高度设为500px，保持比例
         self.label.setPixmap(scaled_pixmap)
 
         # 设置初始位置，让他/她在屏幕右下角显示
@@ -49,6 +52,8 @@ class DesktopPet(QWidget):
         #对话框，用于听校拟们讲废话
         self.bubble = BubbleDialog(self, self.username,self.pet_name)  # 初始化对话框(关键：parent=self
         self.bubble.hide()  # 默认隐藏
+
+        self.setMouseTracking(True)  # 在 initUI 中添加以确保鼠标事件能被正确捕获
 
     def load_pet_image(self,path):
         if not os.path.exists(path):
@@ -89,17 +94,28 @@ class DesktopPet(QWidget):
         if event.button() == Qt.LeftButton:
             self.dragging=True
             self.drag_pos=event.globalPos() - self.pos()
+            self.drag_start_pos = event.pos()  # 记录按下时的位置
             event.accept()
+
         elif event.button() == Qt.RightButton:
             self.middle_dragging = True
             self.middle_drag_start = event.globalPos()
             event.accept()
 
     def mouseMoveEvent(self, event):
+        dragged=f"{self.pet_folder}/浙叠版.png"
+
         if self.dragging and event.buttons() == Qt.LeftButton:
             self.move(event.globalPos() - self.drag_pos)
             self.bubble.move_to(self.pos())
+
+            move_distance = (event.pos() - self.drag_start_pos).manhattanLength()
+            if move_distance > self.drag_threshold:
+                self.is_dragging = True  # 标记为拖动
+                if os.path.exists(dragged):
+                    self.load_pet_image(dragged)  # 切换为拖动状态
             event.accept()
+
         elif self.middle_dragging and event.buttons() == Qt.RightButton:
             delta = event.globalPos() - self.middle_drag_start
             self.rotation_angle += delta.x() * 0.5  # 控制旋转速度
@@ -109,8 +125,13 @@ class DesktopPet(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.dragging=False
-            self.drag_pos=None
+            if self.is_dragging:
+                self.dragging=False
+                self.is_dragging=False
+                self.drag_pos=None
+                if os.path.exists(self.dizzy_path):
+                    self.load_pet_image(self.dizzy_path)
+                QTimer.singleShot(1500, self.reset_pet) # 恢复默认形态
         elif event.button() == Qt.RightButton:
             self.middle_dragging = False
 
@@ -128,6 +149,7 @@ class DesktopPet(QWidget):
         scaled_pixmap = rotated_pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)
         self.label.setPixmap(scaled_pixmap)
         self.label.repaint()
+
 class BubbleDialog(QLabel):
     def __init__(self, uname,pname,parent=DesktopPet, text="Hello!" ):
         super().__init__(parent)
