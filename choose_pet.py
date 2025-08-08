@@ -7,8 +7,9 @@ from PyQt5.QtCore import Qt,QSize
 from show_pet import DesktopPet
 
 class PetSelectionWindow(QWidget):
-    def __init__(self):
+    def __init__(self,username):
         super().__init__()
+        self.username=username
         self.if_chosen()
 
     def if_chosen(self):
@@ -26,12 +27,12 @@ class PetSelectionWindow(QWidget):
 
         # 宠物数据（图片路径和名称）
         self.pets = [
-            {"name": "Shanghai Jiao Tong University", "image": "pet_sjtu/pet.png"},
-            {"name": "Nanjing University", "image": "pet_nju/pet.png"},
-            {"name": "Northwestern Polytechnical University", "image": "pet_npu/pet.png"},
-            {"name": "Beihang University", "image": "pet_buaa/pet.png"},
-            {"name": "Southeast University", "image": "pet_seu/pet.png"},
-            {"name": "University of Science and Technology of China", "image": "pet_ustc/pet.png"}
+            {"name": "Shanghai Jiao Tong University", "image": "sjtu"},
+            {"name": "Nanjing University", "image": "nju"},
+            {"name": "Northwestern Polytechnical University", "image": "npu"},
+            {"name": "Beihang University", "image": "buaa"},
+            {"name": "Southeast University", "image": "seu"},
+            {"name": "University of Science and Technology of China", "image": "ustc"}
         ]
 
         # 创建列表控件
@@ -43,7 +44,7 @@ class PetSelectionWindow(QWidget):
         # 添加宠物项
         for pet in self.pets:
             item = QListWidgetItem(pet["name"])
-            item.setIcon(QIcon(QPixmap(pet["image"])))
+            item.setIcon(QIcon(QPixmap(f"pet_{pet['image']}/pet.png")))
             item.setData(Qt.UserRole, pet)  # 存储完整数据
             self.list_widget.addItem(item)
 
@@ -63,10 +64,11 @@ class PetSelectionWindow(QWidget):
         if selected_item:
             pet = selected_item.data(Qt.UserRole)
             with open ("userinfo.txt","a",encoding='utf-8') as f:
-                f.write(f'Pet:{pet['name']}\n')
+                f.write(f"Pet:{pet['image']}\n")
             QMessageBox.information(self, 'Success',f"You have chosen:{pet['name']}")
-            self.pet = DesktopPet(pet["image"])
+            self.pet = DesktopPet(pet["image"],self.username)
             self.pet.show()
+            self.pet.greet()
             self.close()
         else:
             QMessageBox.warning(self, 'Warning',"Please choose a desktop pet first！" )
@@ -86,9 +88,9 @@ class PetSelectionWindow(QWidget):
             with open("userinfo.txt", "r") as f:
                 pet_line = f.readlines()[-1].strip()
                 pet_name = pet_line.split(":")[1]
-                pet = f"pet_{pet_name.lower().split()[0]}/pet.png"
-            self.pet = DesktopPet(pet)
+            self.pet = DesktopPet(pet_name,self.username)
             self.pet.show()
+            self.pet.greet()
             self.close()
 
     def change_pet(self):
@@ -109,6 +111,6 @@ class PetSelectionWindow(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = PetSelectionWindow()
+    window = PetSelectionWindow("Arike")
     window.show()
     sys.exit(app.exec_())

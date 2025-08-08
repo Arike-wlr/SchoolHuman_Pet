@@ -57,7 +57,7 @@ class LoginWindow(QWidget):
                 f.write(f'Account:{account}\n')
                 f.write(f'Username:{username}\n')
             QMessageBox.information(self, 'Success', f'Welcome,{username}')
-            self.new_window = PetSelectionWindow()  # 绑定到self（父对象）
+            self.new_window = PetSelectionWindow(username)  # 绑定到self（父对象）
             self.new_window.show()
             self.close()
 
@@ -66,7 +66,10 @@ def if_login(app):
     #就是检查有没有userinfo.txt文件
     file_name = "userinfo.txt"  # 目标文件名
     if os.path.isfile(file_name):
-        window = PetSelectionWindow()
+        with open ("userinfo.txt","r",encoding="utf-8") as f:
+            name_line=f.readlines()[1].strip()
+            username=name_line.split(":")[1]
+        window = PetSelectionWindow(username)
     else:
         window = LoginWindow()
 
