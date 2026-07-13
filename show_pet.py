@@ -7,10 +7,9 @@ import os
 import keyboard
 from PyQt5.QtGui import QTransform
 class DesktopPet(QWidget):
-    def __init__(self,pet_name,username):
+    def __init__(self,username):
         super().__init__()
-        self.pet_name=pet_name.upper()
-        self.pet_folder = f"pet_{pet_name}"  # 存储宠物文件夹名
+        self.pet_folder = "pet"  # 存储宠物文件夹名
         self.pet_init = f"{self.pet_folder}/pet.png" # 初始形态的图片
         self.SIZE=500  # 初始形态的图片大小
         self.username=username
@@ -51,7 +50,7 @@ class DesktopPet(QWidget):
         self.timer.start(100)  # 每100毫秒触发一次
 
         #对话框，用于听校拟们讲废话
-        self.bubble = BubbleDialog(self, self.username,self.pet_name)  # 初始化对话框(关键：parent=self
+        self.bubble = BubbleDialog(self)  # 初始化对话框(关键：parent=self
         self.bubble.hide()  # 默认隐藏
 
         self.setMouseTracking(True)  # 在 initUI 中添加以确保鼠标事件能被正确捕获
@@ -156,10 +155,8 @@ class DesktopPet(QWidget):
         self.label.repaint()
 
 class BubbleDialog(QLabel):
-    def __init__(self, uname,pname,parent=DesktopPet, text="Hello!" ):
+    def __init__(self, parent=None, text="Hello!" ):
         super().__init__(parent)
-        self.uname=uname
-        self.pname=pname
         self.setText(text)
         self.setStyleSheet("""
             background-color: white;
@@ -183,7 +180,7 @@ class BubbleDialog(QLabel):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    pet = DesktopPet("sjtu","Arike")
+    pet = DesktopPet("Arike")  # 直接运行本文件时的测试用例
     pet.show()
     pet.greet()
     sys.exit(app.exec_())
