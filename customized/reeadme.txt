@@ -1,0 +1,5 @@
+可定制API使用说明：
+
+1、先通过配置页面选定appid 配置分类策略以及工具策略；配置页面：http://console.xfyun.cn/services/custom_api
+2、通过sparkPythondemo.py  填写密钥信息后（在控制台页面获取），直接运行调用服务
+3、如果要对私有知识数据问答，需要先通过接口上传知识库，具体上传逻辑参考RAG-upload.py

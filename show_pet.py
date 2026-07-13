@@ -1,86 +1,337 @@
-# 简单示例：使用PyQt5创建基础窗口
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget,QDesktopWidget, QMenu
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QDesktopWidget, QMenu, QDialog, QTextEdit, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QTimer, QPoint
+from PyQt5.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
 import sys
 import os
 import keyboard
 from PyQt5.QtGui import QTransform
 from datetime import datetime
 import random
-class DesktopPet(QWidget):
-    def __init__(self,username):
+import json
+import sys
+import markdown
+sys.path.append(os.path.join(os.path.dirname(__file__), 'customized'))
+from SparkApi2 import main as spark_api_main
+
+
+class ChatWorker(QThread):
+    response_received = pyqtSignal(str, bool)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, appid, api_key, api_secret, spark_url, domain, question):
         super().__init__()
-        self.pet_folder = "pet"  # 存储宠物文件夹名
-        self.pet_init = f"{self.pet_folder}/pet.png" # 初始形态的图片
-        self.SIZE=500  # 初始形态的图片大小
-        self.username=username
+        self.appid = appid
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.spark_url = spark_url
+        self.domain = domain
+        self.question = question
+
+    def on_response(self, content, finished):
+        self.response_received.emit(content, finished)
+
+    def run(self):
+        try:
+            spark_api_main(
+                appid=self.appid,
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                Spark_url=self.spark_url,
+                domain=self.domain,
+                question=self.question,
+                on_response=self.on_response
+            )
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+class ChatDialog(QDialog):
+    def __init__(self, parent=None, username=""):
+        super().__init__(parent)
+        self.username = username
+        self.setWindowTitle("Pet Chat")
+        self.setMinimumSize(500, 400)
+
+        self.api_config = self.load_api_config()
+        self.history_dir = os.path.join(os.path.dirname(__file__), 'customized', 'chat_records')
+        os.makedirs(self.history_dir, exist_ok=True)
+        self.history_file = self.get_latest_history_file()
+
+        self.layout = QVBoxLayout(self)
+
+        self.button_layout = QHBoxLayout()
+        self.new_conv_button = QPushButton("New Conversation", self)
+        self.new_conv_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ff6b6b;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 6px 15px;
+                font: bold 12px Arial;
+            }
+            QPushButton:hover {
+                background-color: #ee5a5a;
+            }
+        """)
+        self.new_conv_button.clicked.connect(self.new_conversation)
+        self.button_layout.addWidget(self.new_conv_button)
+        self.button_layout.addStretch()
+        self.layout.addLayout(self.button_layout)
+
+        self.chat_area = QTextEdit(self)
+        self.chat_area.setReadOnly(True)
+        self.chat_area.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                border: 2px solid #0078D7;
+                border-radius: 10px;
+                padding: 10px;
+                font: 20px Arial;
+            }
+        """)
+        self.layout.addWidget(self.chat_area)
+
+        self.input_layout = QHBoxLayout()
+        self.input_field = QLineEdit(self)
+        self.input_field.setPlaceholderText("Type a message...")
+        self.input_field.setStyleSheet("""
+            QLineEdit {
+                border: 2px solid #0078D7;
+                border-radius: 5px;
+                padding: 8px;
+                font: 14px Arial;
+            }
+        """)
+        self.input_field.returnPressed.connect(self.send_message)
+        self.input_layout.addWidget(self.input_field)
+
+        self.send_button = QPushButton("Send", self)
+        self.send_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0078D7;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 20px;
+                font: bold 14px Arial;
+            }
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+        """)
+        self.send_button.clicked.connect(self.send_message)
+        self.input_layout.addWidget(self.send_button)
+
+        self.layout.addLayout(self.input_layout)
+
+        self.chat_history = []
+        self.is_first_response = False
+        self.load_history()
+
+    def load_api_config(self):
+        config_path = os.path.join(os.path.dirname(__file__), 'customized', 'api_config.json')
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load API config: {e}")
+            return None
+
+    def get_latest_history_file(self):
+        try:
+            files = [f for f in os.listdir(self.history_dir) if f.endswith('.json')]
+            if not files:
+                return self.create_new_history_file()
+            files.sort(reverse=True)
+            return os.path.join(self.history_dir, files[0])
+        except Exception as e:
+            print(f"Failed to get latest history file: {e}")
+            return self.create_new_history_file()
+
+    def create_new_history_file(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = os.path.join(self.history_dir, f"chat_{timestamp}.json")
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        return file_path
+
+    def load_history(self):
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self.chat_history = json.load(f)
+                for msg in self.chat_history:
+                    is_user = (msg["role"] == "user")
+                    self.append_message(self.username if is_user else "Pet", msg["content"], is_user)
+        except Exception as e:
+            print(f"Failed to load chat history: {e}")
+            self.chat_history = []
+
+    def save_history(self):
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.chat_history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Failed to save chat history: {e}")
+
+    def new_conversation(self):
+        self.history_file = self.create_new_history_file()
+        self.chat_history = []
+        self.save_history()
+        self.chat_area.clear()
+        self.append_message("System", "New conversation started.", is_user=False)
+
+    def closeEvent(self, event):
+        self.save_history()
+        event.accept()
+
+    def send_message(self):
+        text = self.input_field.text().strip()
+        if not text:
+            return
+
+        self.append_message(self.username, text, is_user=True)
+        self.chat_history.append({"role": "user", "content": text})
+        self.save_history()
+        self.input_field.clear()
+        self.send_button.setEnabled(False)
+        self.input_field.setEnabled(False)
+        self.is_first_response = True
+
+        if not self.api_config:
+            self.append_message("System", "API configuration not found!", is_user=False)
+            self.send_button.setEnabled(True)
+            self.input_field.setEnabled(True)
+            return
+
+        history_text = ""
+        for msg in self.chat_history[:-1]:
+            role_prefix = "User: " if msg["role"] == "user" else "Pet: "
+            history_text += role_prefix + msg["content"] + "\n"
+
+        full_question = history_text + f"User: {text}"
+
+        question = [
+            {
+                "type": "text",
+                "text": full_question
+            }
+        ]
+
+        self.worker = ChatWorker(
+            appid=self.api_config["APPID"],
+            api_key=self.api_config["APIKey"],
+            api_secret=self.api_config["APISecret"],
+            spark_url=self.api_config["Spark_url"],
+            domain=self.api_config["domain"],
+            question=question
+        )
+        self.worker.response_received.connect(self.on_response)
+        self.worker.error_occurred.connect(self.on_error)
+        self.worker.finished.connect(self.on_worker_finished)
+        self.worker.start()
+
+    def append_message(self, sender, content, is_user=False):
+        color = "#0078D7" if is_user else "#2ECC71"
+        prefix = "You" if is_user else "Pet"
+        html_content = markdown.markdown(content)
+        self.chat_area.append(f'<b><span style="color:{color}">{prefix}:</span></b><br>{html_content}')
+
+    def on_response(self, content, finished):
+        if self.is_first_response:
+            self.current_response = content
+            html_content = markdown.markdown(content)
+            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}')
+            self.is_first_response = False
+        else:
+            self.current_response += content
+            html_content = markdown.markdown(self.current_response)
+            cursor = self.chat_area.textCursor()
+            cursor.select(cursor.Document)
+            cursor.removeSelectedText()
+            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}')
+        self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
+        if finished:
+            self.chat_history.append({"role": "assistant", "content": self.current_response})
+            self.save_history()
+            self.send_button.setEnabled(True)
+            self.input_field.setEnabled(True)
+            self.input_field.setFocus()
+
+    def on_error(self, error_msg):
+        self.append_message("System", f"Error: {error_msg}", is_user=False)
+        self.send_button.setEnabled(True)
+        self.input_field.setEnabled(True)
+
+    def on_worker_finished(self):
+        pass
+
+
+class DesktopPet(QWidget):
+    def __init__(self, username):
+        super().__init__()
+        self.pet_folder = "pet"
+        self.pet_init = f"{self.pet_folder}/pet.png"
+        self.SIZE = 500
+        self.username = username
         self.initUI()
 
-        self.dragging=False
-        self.is_dragging=False # 用于区分点击和拖动
-        self.drag_threshold = 5  # 拖动阈值（像素）
-        self.drag_pos=QPoint(0, 0)
+        self.dragging = False
+        self.is_dragging = False
+        self.drag_threshold = 5
+        self.drag_pos = QPoint(0, 0)
         self.rotation_angle = 0
         self.middle_dragging = False
         self.middle_drag_start = QPoint(0, 0)
-        self.dizzy_path=f"{self.pet_folder}/dizzy.png"
-        self.happy_path=f"{self.pet_folder}/happy.png"
+        self.dizzy_path = f"{self.pet_folder}/dizzy.png"
+        self.happy_path = f"{self.pet_folder}/happy.png"
 
-        # ===== 状态值系统 =====
-        self.mood = 100      # 心情值（0-100）
-        self.hunger = 100    # 饱食度（0-100）
-        self.fatigue = 0     # 疲劳度（0-100，越低越好）
+        self.mood = 100
+        self.hunger = 100
+        self.fatigue = 0
         self.stat_timer = QTimer(self)
         self.stat_timer.timeout.connect(self.decay_stats)
-        self.stat_timer.start(60000)  # 每分钟衰减一次
+        self.stat_timer.start(60000)
 
-        # ===== 重力掉落 =====
-        self.gravity = 2500.0   # 像素/秒²
+        self.gravity = 2500.0
         self.velocity_y = 0.0
         self.falling = False
         self.ground_y = 0
 
-        # ===== 分时段问候 =====
-        self.last_greet_time = 0  # 上次弹出问候的时间戳
+        self.last_greet_time = 0
         self.greet_timer = QTimer(self)
         self.greet_timer.timeout.connect(self.check_time_greet)
-        self.greet_timer.start(60000)  # 每分钟检查一次时段
+        self.greet_timer.start(60000)
 
-        # 右键点击/拖动区分
         self.right_dragged = False
 
     def initUI(self):
-        # 设置无边框和置顶
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        # 加载宠物图像
         self.label = QLabel(self)
         pixmap = QPixmap(self.pet_init)
 
-        scaled_pixmap = pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)  # 宽度和高度设为500px，保持比例
+        scaled_pixmap = pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)
         self.label.setPixmap(scaled_pixmap)
 
-        # 设置初始位置，让他/她在屏幕右下角显示
         self.resize(scaled_pixmap.width(), scaled_pixmap.height())
         screen = QDesktopWidget().screenGeometry()
         x = screen.width() - scaled_pixmap.width() - 100
         y = screen.height() - scaled_pixmap.height() - 100
         self.move(x, y)
 
-        # 定时器用于动画
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.start(100)  # 每100毫秒触发一次
+        self.timer.start(100)
 
-        #对话框，用于听校拟们讲废话
-        self.bubble = BubbleDialog(self)  # 初始化对话框(关键：parent=self
-        self.bubble.hide()  # 默认隐藏
+        self.bubble = BubbleDialog(self)
+        self.bubble.hide()
 
-        self.setMouseTracking(True)  # 在 initUI 中添加以确保鼠标事件能被正确捕获
+        self.setMouseTracking(True)
 
-    def load_pet_image(self,path):
+    def load_pet_image(self, path):
         if not os.path.exists(path):
             print(f"Error: Image file not found at {path}")
             return False
@@ -90,18 +341,17 @@ class DesktopPet(QWidget):
             print(f"Error: Failed to load image at {path}")
             return False
 
-        scaled_pixmap = pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)  # 宽度和高度设为200px，保持比例
+        scaled_pixmap = pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)
         self.label.setPixmap(scaled_pixmap)
         self.label.repaint()
         self.update()
         return True
 
     def greet(self):
-        #打招呼
         hello_path = f"{self.pet_folder}/hello.png"
         if self.load_pet_image(hello_path):
-            self.bubble.setText(f"""Nice to meet you,\n{self.username}!""")  # 更新文本
-            self.bubble.move_to(self.pos())  # 移动到宠物旁边
+            self.bubble.setText(f"""Nice to meet you,\n{self.username}!""")
+            self.bubble.move_to(self.pos())
             self.bubble.show()
             QTimer.singleShot(3000, self.reset_pet)
             QTimer.singleShot(3000, self.bubble.hide)
@@ -109,47 +359,42 @@ class DesktopPet(QWidget):
             print(f"Failed to load image at {hello_path}")
 
     def reset_pet(self):
-        #恢复默认初始形态；下落过程中不复位
         if self.falling:
             return
         self.load_pet_image(self.pet_init)
 
     def animate(self):
         if self.falling:
-            dt = 0.1  # 100ms 一帧
+            dt = 0.1
             self.velocity_y += self.gravity * dt
             new_y = self.y() + self.velocity_y * dt
             if new_y >= self.ground_y:
                 new_y = self.ground_y
                 self.falling = False
                 self.velocity_y = 0.0
-                # 落地晕眩（无 dizzy 图则直接复位）
                 if os.path.exists(self.dizzy_path):
                     self.load_pet_image(self.dizzy_path)
-                self.mood = max(0, self.mood - 5)  # 摔一下掉心情
+                self.mood = max(0, self.mood - 5)
                 QTimer.singleShot(1500, self.reset_pet)
             self.move(self.x(), int(new_y))
             self.bubble.move_to(self.pos())
 
     def start_fall(self):
-        """松手后开始重力下落；若已在底部则直接晕眩。"""
         screen = QDesktopWidget().availableGeometry()
         self.ground_y = screen.bottom() - self.height() + 1
         if self.y() < self.ground_y - 5:
             self.velocity_y = 0.0
             self.falling = True
         else:
-            # 没有下落空间，沿用原来的晕眩表现
             if os.path.exists(self.dizzy_path):
                 self.load_pet_image(self.dizzy_path)
             QTimer.singleShot(1500, self.reset_pet)
 
-
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.dragging=True
-            self.drag_pos=event.globalPos() - self.pos()
-            self.drag_start_pos = event.pos()  # 记录按下时的位置
+            self.dragging = True
+            self.drag_pos = event.globalPos() - self.pos()
+            self.drag_start_pos = event.pos()
             if os.path.exists(self.happy_path):
                 self.load_pet_image(self.happy_path)
             event.accept()
@@ -162,7 +407,7 @@ class DesktopPet(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event):
-        dragged=f"{self.pet_folder}/浙叠版.png"
+        dragged = f"{self.pet_folder}/浙叠版.png"
 
         if self.dragging and event.buttons() == Qt.LeftButton:
             self.move(event.globalPos() - self.drag_pos)
@@ -170,16 +415,16 @@ class DesktopPet(QWidget):
 
             move_distance = (event.pos() - self.drag_start_pos).manhattanLength()
             if move_distance > self.drag_threshold:
-                self.is_dragging = True  # 标记为拖动
+                self.is_dragging = True
                 if os.path.exists(dragged):
-                    self.load_pet_image(dragged)  # 切换为拖动状态
+                    self.load_pet_image(dragged)
             event.accept()
 
         elif self.middle_dragging and event.buttons() == Qt.RightButton:
             delta = event.globalPos() - self.middle_drag_start
             if (event.pos() - self.right_drag_start_pos).manhattanLength() > self.drag_threshold:
-                self.right_dragged = True  # 标记为右键拖动（旋转），不弹菜单
-            self.rotation_angle += delta.x() * 0.5  # 控制旋转速度
+                self.right_dragged = True
+            self.rotation_angle += delta.x() * 0.5
             self.middle_drag_start = event.globalPos()
             self.update_rotation()
             event.accept()
@@ -187,36 +432,30 @@ class DesktopPet(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             if self.is_dragging:
-                self.dragging=False
-                self.is_dragging=False
-                self.drag_pos=None
-                self.start_fall()  # 松手后重力下落
+                self.dragging = False
+                self.is_dragging = False
+                self.drag_pos = None
+                self.start_fall()
             else:
                 QTimer.singleShot(1500, self.reset_pet)
         elif event.button() == Qt.RightButton:
             was_dragging = self.middle_dragging
             dragged = self.right_dragged
             self.middle_dragging = False
-            # 纯右键点击（无拖动）→ 弹出菜单；右键拖动→已旋转，不弹
             if was_dragging and not dragged:
                 self.show_context_menu(event.globalPos())
 
-    # ===== 状态值系统 =====
     def decay_stats(self):
-        """每分钟衰减一次状态值。"""
         self.mood = max(0, self.mood - 1)
         self.hunger = max(0, self.hunger - 2)
         self.fatigue = min(100, self.fatigue + 1)
-        # 饱食度过低会拖累心情
         if self.hunger < 30:
             self.mood = max(0, self.mood - 1)
-        # 心情过低切伤心表情（无专用 sad 图，暂用 dizzy 代替）
         if self.mood < 20 and not self.falling and not self.dragging:
             if os.path.exists(self.dizzy_path):
                 self.load_pet_image(self.dizzy_path)
 
     def feed(self):
-        """喂食：恢复饱食度与心情。"""
         self.hunger = min(100, self.hunger + 30)
         self.mood = min(100, self.mood + 20)
         if os.path.exists(self.happy_path):
@@ -227,17 +466,21 @@ class DesktopPet(QWidget):
         QTimer.singleShot(2000, self.reset_pet)
         QTimer.singleShot(3000, self.bubble.hide)
 
+    def open_chat(self):
+        self.chat_dialog = ChatDialog(self, self.username)
+        self.chat_dialog.show()
+
     def show_context_menu(self, pos):
-        """右键菜单。"""
         menu = QMenu(self)
         feed_action = menu.addAction("Feed")
+        chat_action = menu.addAction("Chat")
         action = menu.exec_(pos)
         if action == feed_action:
             self.feed()
+        elif action == chat_action:
+            self.open_chat()
 
-    # ===== 分时段问候 =====
     def check_time_greet(self):
-        """每分钟检查，每10分钟随机弹出一句问候。"""
         now = datetime.now()
         hour = now.hour
 
@@ -277,7 +520,7 @@ class DesktopPet(QWidget):
             return
 
         elapsed = now.timestamp() - self.last_greet_time
-        if elapsed >= 600:  # 10分钟 = 600秒
+        if elapsed >= 600:
             self.last_greet_time = now.timestamp()
             msg = random.choice(greetings[period])
             self.bubble.setText(msg)
@@ -291,17 +534,16 @@ class DesktopPet(QWidget):
             print(f"Error: Failed to load image at {self.pet_init}")
             return
 
-        # 使用 QTransform 旋转图像
         transform = QTransform().rotate(self.rotation_angle)
         rotated_pixmap = pixmap.transformed(transform, Qt.SmoothTransformation)
 
-        # 缩放后设置图像
         scaled_pixmap = rotated_pixmap.scaled(self.SIZE, self.SIZE, Qt.KeepAspectRatio)
         self.label.setPixmap(scaled_pixmap)
         self.label.repaint()
 
+
 class BubbleDialog(QLabel):
-    def __init__(self, parent=None, text="Hello!" ):
+    def __init__(self, parent=None, text="Hello!"):
         super().__init__(parent)
         self.setText(text)
         self.setStyleSheet("""
@@ -319,12 +561,12 @@ class BubbleDialog(QLabel):
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
 
     def move_to(self, pos: QPoint):
-        """移动到指定位置（宠物右上角）"""
         self.move(pos.x() + 50, pos.y() - self.height())
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    pet = DesktopPet("Arike")  # 直接运行本文件时的测试用例
+    pet = DesktopPet("Arike")
     pet.show()
     pet.greet()
     sys.exit(app.exec_())
