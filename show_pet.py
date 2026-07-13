@@ -24,6 +24,7 @@ class DesktopPet(QWidget):
         self.middle_dragging = False
         self.middle_drag_start = QPoint(0, 0)
         self.dizzy_path=f"{self.pet_folder}/dizzy.png"
+        self.happy_path=f"{self.pet_folder}/happy.png"
 
     def initUI(self):
         # 设置无边框和置顶
@@ -95,6 +96,8 @@ class DesktopPet(QWidget):
             self.dragging=True
             self.drag_pos=event.globalPos() - self.pos()
             self.drag_start_pos = event.pos()  # 记录按下时的位置
+            if os.path.exists(self.happy_path):
+                self.load_pet_image(self.happy_path)
             event.accept()
 
         elif event.button() == Qt.RightButton:
@@ -132,6 +135,8 @@ class DesktopPet(QWidget):
                 if os.path.exists(self.dizzy_path):
                     self.load_pet_image(self.dizzy_path)
                 QTimer.singleShot(1500, self.reset_pet) # 恢复默认形态
+            else:
+                QTimer.singleShot(1500, self.reset_pet)
         elif event.button() == Qt.RightButton:
             self.middle_dragging = False
 
