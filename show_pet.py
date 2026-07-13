@@ -7,6 +7,7 @@ import os
 import keyboard
 from PyQt5.QtGui import QTransform
 from datetime import datetime
+import random
 class DesktopPet(QWidget):
     def __init__(self,username):
         super().__init__()
@@ -41,7 +42,7 @@ class DesktopPet(QWidget):
         self.ground_y = 0
 
         # ===== 分时段问候 =====
-        self.last_greet_period = None
+        self.last_greet_time = 0  # 上次弹出问候的时间戳
         self.greet_timer = QTimer(self)
         self.greet_timer.timeout.connect(self.check_time_greet)
         self.greet_timer.start(60000)  # 每分钟检查一次时段
@@ -236,19 +237,49 @@ class DesktopPet(QWidget):
 
     # ===== 分时段问候 =====
     def check_time_greet(self):
-        """根据当前时段弹一句问候（每个时段只弹一次）。"""
-        hour = datetime.now().hour
-        if 6 <= hour < 11:
-            period, msg = "morning", f"Good morning,\n{self.username}!"
-        elif 11 <= hour < 14:
-            period, msg = "noon", f"Lunch time,\n{self.username}!"
-        elif 18 <= hour < 22:
-            period, msg = "evening", f"Good evening,\n{self.username}!"
-        else:
-            return  # 深夜/凌晨不打扰
+        """每分钟检查，每10分钟随机弹出一句问候。"""
+        now = datetime.now()
+        hour = now.hour
 
-        if period != self.last_greet_period:
-            self.last_greet_period = period
+        greetings = {
+            "morning": [
+                f"Good morning,\n{self.username}!",
+                f"Morning,\n{self.username}!",
+                f"Time to wake up,\n{self.username}!",
+                f"Rise and shine,\n{self.username}!",
+                f"Start your day,\n{self.username}!",
+                f"Good day,\n{self.username}!",
+            ],
+            "noon": [
+                f"Lunch time,\n{self.username}!",
+                f"Eat well,\n{self.username}!",
+                f"Have a good meal,\n{self.username}!",
+                f"Time for lunch,\n{self.username}!",
+                f"Bon appétit,\n{self.username}!",
+            ],
+            "evening": [
+                f"Good evening,\n{self.username}!",
+                f"Long day,\n{self.username}!",
+                f"Relax,\n{self.username}!",
+                f"Evening,\n{self.username}!",
+                f"Wind down,\n{self.username}!",
+                f"Good night soon,\n{self.username}!",
+            ],
+        }
+
+        if 6 <= hour < 11:
+            period = "morning"
+        elif 11 <= hour < 14:
+            period = "noon"
+        elif 18 <= hour < 22:
+            period = "evening"
+        else:
+            return
+
+        elapsed = now.timestamp() - self.last_greet_time
+        if elapsed >= 600:  # 10分钟 = 600秒
+            self.last_greet_time = now.timestamp()
+            msg = random.choice(greetings[period])
             self.bubble.setText(msg)
             self.bubble.move_to(self.pos())
             self.bubble.show()
