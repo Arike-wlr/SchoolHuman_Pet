@@ -1,11 +1,12 @@
 # 简单示例：使用PyQt5创建基础窗口
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget,QDesktopWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget,QDesktopWidget, QMenu
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer, QPoint
 import sys
 import os
 import keyboard
 from PyQt5.QtGui import QTransform
+from datetime import datetime
 class DesktopPet(QWidget):
     def __init__(self,username):
         super().__init__()
@@ -24,6 +25,29 @@ class DesktopPet(QWidget):
         self.middle_drag_start = QPoint(0, 0)
         self.dizzy_path=f"{self.pet_folder}/dizzy.png"
         self.happy_path=f"{self.pet_folder}/happy.png"
+
+        # ===== 状态值系统 =====
+        self.mood = 100      # 心情值（0-100）
+        self.hunger = 100    # 饱食度（0-100）
+        self.fatigue = 0     # 疲劳度（0-100，越低越好）
+        self.stat_timer = QTimer(self)
+        self.stat_timer.timeout.connect(self.decay_stats)
+        self.stat_timer.start(60000)  # 每分钟衰减一次
+
+        # ===== 重力掉落 =====
+        self.gravity = 2500.0   # 像素/秒²
+        self.velocity_y = 0.0
+        self.falling = False
+        self.ground_y = 0
+
+        # ===== 分时段问候 =====
+        self.last_greet_period = None
+        self.greet_timer = QTimer(self)
+        self.greet_timer.timeout.connect(self.check_time_greet)
+        self.greet_timer.start(60000)  # 每分钟检查一次时段
+
+        # 右键点击/拖动区分
+        self.right_dragged = False
 
     def initUI(self):
         # 设置无边框和置顶
@@ -79,15 +103,45 @@ class DesktopPet(QWidget):
             self.bubble.move_to(self.pos())  # 移动到宠物旁边
             self.bubble.show()
             QTimer.singleShot(3000, self.reset_pet)
+            QTimer.singleShot(3000, self.bubble.hide)
         else:
             print(f"Failed to load image at {hello_path}")
 
     def reset_pet(self):
-        #恢复默认初始形态
+        #恢复默认初始形态；下落过程中不复位
+        if self.falling:
+            return
         self.load_pet_image(self.pet_init)
 
     def animate(self):
-        pass
+        if self.falling:
+            dt = 0.1  # 100ms 一帧
+            self.velocity_y += self.gravity * dt
+            new_y = self.y() + self.velocity_y * dt
+            if new_y >= self.ground_y:
+                new_y = self.ground_y
+                self.falling = False
+                self.velocity_y = 0.0
+                # 落地晕眩（无 dizzy 图则直接复位）
+                if os.path.exists(self.dizzy_path):
+                    self.load_pet_image(self.dizzy_path)
+                self.mood = max(0, self.mood - 5)  # 摔一下掉心情
+                QTimer.singleShot(1500, self.reset_pet)
+            self.move(self.x(), int(new_y))
+            self.bubble.move_to(self.pos())
+
+    def start_fall(self):
+        """松手后开始重力下落；若已在底部则直接晕眩。"""
+        screen = QDesktopWidget().availableGeometry()
+        self.ground_y = screen.bottom() - self.height() + 1
+        if self.y() < self.ground_y - 5:
+            self.velocity_y = 0.0
+            self.falling = True
+        else:
+            # 没有下落空间，沿用原来的晕眩表现
+            if os.path.exists(self.dizzy_path):
+                self.load_pet_image(self.dizzy_path)
+            QTimer.singleShot(1500, self.reset_pet)
 
 
     def mousePressEvent(self, event):
@@ -102,6 +156,8 @@ class DesktopPet(QWidget):
         elif event.button() == Qt.RightButton:
             self.middle_dragging = True
             self.middle_drag_start = event.globalPos()
+            self.right_drag_start_pos = event.pos()
+            self.right_dragged = False
             event.accept()
 
     def mouseMoveEvent(self, event):
@@ -120,6 +176,8 @@ class DesktopPet(QWidget):
 
         elif self.middle_dragging and event.buttons() == Qt.RightButton:
             delta = event.globalPos() - self.middle_drag_start
+            if (event.pos() - self.right_drag_start_pos).manhattanLength() > self.drag_threshold:
+                self.right_dragged = True  # 标记为右键拖动（旋转），不弹菜单
             self.rotation_angle += delta.x() * 0.5  # 控制旋转速度
             self.middle_drag_start = event.globalPos()
             self.update_rotation()
@@ -131,13 +189,70 @@ class DesktopPet(QWidget):
                 self.dragging=False
                 self.is_dragging=False
                 self.drag_pos=None
-                if os.path.exists(self.dizzy_path):
-                    self.load_pet_image(self.dizzy_path)
-                QTimer.singleShot(1500, self.reset_pet) # 恢复默认形态
+                self.start_fall()  # 松手后重力下落
             else:
                 QTimer.singleShot(1500, self.reset_pet)
         elif event.button() == Qt.RightButton:
+            was_dragging = self.middle_dragging
+            dragged = self.right_dragged
             self.middle_dragging = False
+            # 纯右键点击（无拖动）→ 弹出菜单；右键拖动→已旋转，不弹
+            if was_dragging and not dragged:
+                self.show_context_menu(event.globalPos())
+
+    # ===== 状态值系统 =====
+    def decay_stats(self):
+        """每分钟衰减一次状态值。"""
+        self.mood = max(0, self.mood - 1)
+        self.hunger = max(0, self.hunger - 2)
+        self.fatigue = min(100, self.fatigue + 1)
+        # 饱食度过低会拖累心情
+        if self.hunger < 30:
+            self.mood = max(0, self.mood - 1)
+        # 心情过低切伤心表情（无专用 sad 图，暂用 dizzy 代替）
+        if self.mood < 20 and not self.falling and not self.dragging:
+            if os.path.exists(self.dizzy_path):
+                self.load_pet_image(self.dizzy_path)
+
+    def feed(self):
+        """喂食：恢复饱食度与心情。"""
+        self.hunger = min(100, self.hunger + 30)
+        self.mood = min(100, self.mood + 20)
+        if os.path.exists(self.happy_path):
+            self.load_pet_image(self.happy_path)
+        self.bubble.setText("Yummy!")
+        self.bubble.move_to(self.pos())
+        self.bubble.show()
+        QTimer.singleShot(2000, self.reset_pet)
+        QTimer.singleShot(3000, self.bubble.hide)
+
+    def show_context_menu(self, pos):
+        """右键菜单。"""
+        menu = QMenu(self)
+        feed_action = menu.addAction("Feed")
+        action = menu.exec_(pos)
+        if action == feed_action:
+            self.feed()
+
+    # ===== 分时段问候 =====
+    def check_time_greet(self):
+        """根据当前时段弹一句问候（每个时段只弹一次）。"""
+        hour = datetime.now().hour
+        if 6 <= hour < 11:
+            period, msg = "morning", f"Good morning,\n{self.username}!"
+        elif 11 <= hour < 14:
+            period, msg = "noon", f"Lunch time,\n{self.username}!"
+        elif 18 <= hour < 22:
+            period, msg = "evening", f"Good evening,\n{self.username}!"
+        else:
+            return  # 深夜/凌晨不打扰
+
+        if period != self.last_greet_period:
+            self.last_greet_period = period
+            self.bubble.setText(msg)
+            self.bubble.move_to(self.pos())
+            self.bubble.show()
+            QTimer.singleShot(3000, self.bubble.hide)
 
     def update_rotation(self):
         pixmap = QPixmap(self.pet_init)
@@ -162,17 +277,15 @@ class BubbleDialog(QLabel):
             background-color: white;
             border: 5px solid #0078D7;
             border-radius: 10px;
-            # padding: 5px;
-            padding: 10px;  # 增加内边距
-            margin: 15px;   # 增加外边距（需配合布局）
+            padding: 10px;
+            margin: 15px;
             font: bold 36px;
         """)
         self.setAlignment(Qt.AlignCenter)
-        self.adjustSize()  # 根据文本调整大小
-        self.adjustSize()  # 先根据文本计算基础大小
-        self.resize(self.width() + 200, self.height() + 50)  # 增加额外边距
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.adjustSize()
+        self.adjustSize()
+        self.resize(self.width() + 200, self.height() + 50)
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
 
     def move_to(self, pos: QPoint):
         """移动到指定位置（宠物右上角）"""
