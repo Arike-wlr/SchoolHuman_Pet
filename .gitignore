@@ -27,3 +27,7 @@ Thumbs.db
 
 customized/api_config.json
 customized/chat_records/
+
+build/
+dist/
+*.spec

@@ -18,14 +18,14 @@ class ChatWorker(QThread):
     response_received = pyqtSignal(str, bool)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, appid, api_key, api_secret, spark_url, domain, question):
+    def __init__(self, appid, api_key, api_secret, spark_url, domain, messages):
         super().__init__()
         self.appid = appid
         self.api_key = api_key
         self.api_secret = api_secret
         self.spark_url = spark_url
         self.domain = domain
-        self.question = question
+        self.messages = messages
 
     def on_response(self, content, finished):
         self.response_received.emit(content, finished)
@@ -38,7 +38,7 @@ class ChatWorker(QThread):
                 api_secret=self.api_secret,
                 Spark_url=self.spark_url,
                 domain=self.domain,
-                question=self.question,
+                messages=self.messages,
                 on_response=self.on_response
             )
         except Exception as e:
@@ -142,12 +142,13 @@ class ChatDialog(QDialog):
 
     def load_character_info(self):
         info_path = os.path.join(os.path.dirname(__file__), '高校拟人OC_1位角色_2026-07-13.json')
+        bg_path = os.path.join(os.path.dirname(__file__), '南京高校_2026-07-13.json')
         try:
             with open(info_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if data:
                     char = data[0]
-                    return f"""你现在扮演宁瑾诚，南京大学意识体。
+                    character_text = f"""你现在扮演宁瑾诚，南京大学意识体。
 姓名：{char['姓名']}
 性别：{char['性别']}
 身高：{char['身高']}
@@ -156,9 +157,23 @@ class ChatDialog(QDialog):
 地区：{char['地区']}
 外貌：{char['外貌']}
 性格：温柔细心但有些腹黑，是弟妹控，关心同在南京的弟弟妹妹们。喜欢猫猫，喜欢rua猫，也喜欢被猫rua。喜欢甜食，是那种学术会议上盯着茶歇狂吃的类型。对天文地理和古籍感兴趣，也很会研究计算机。心思比较敏感，很容易被勾起对金大央大的回忆。很恋家。
-设定：{char['设定']}
-
-请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"""
+设定：{char['设定']}"""
+            
+            bg_text = ""
+            try:
+                with open(bg_path, 'r', encoding='utf-8') as f:
+                    bg_data = json.load(f)
+                    if bg_data:
+                        family_members = []
+                        for member in bg_data:
+                            status = member.get('存在状态', '')
+                            if status == '存在':
+                                family_members.append(f"{member['姓名']}（{member['代表高校']}）")
+                        bg_text = f"\n\n家族成员（当前存在）：{'、'.join(family_members)}\n\n注意：当提到其他南京高校时，请参考以上背景设定。"
+            except Exception as e:
+                print(f"Failed to load background info: {e}")
+            
+            return character_text + bg_text + "\n\n请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"
         except Exception as e:
             print(f"Failed to load character info: {e}")
             return ""
@@ -256,22 +271,19 @@ class ChatDialog(QDialog):
             self.input_field.setEnabled(True)
             return
 
-        history_text = ""
-        for msg in self.chat_history[:-1]:
-            role_prefix = "User: " if msg["role"] == "user" else "Pet: "
-            history_text += role_prefix + msg["content"] + "\n"
-
+        messages = []
+        
         if self.character_info:
-            full_question = f"{self.character_info}\n\n{history_text}User: {text}"
-        else:
-            full_question = history_text + f"User: {text}"
-
-        question = [
-            {
-                "type": "text",
-                "text": full_question
-            }
-        ]
+            messages.append({
+                "role": "system",
+                "content": self.character_info
+            })
+        
+        for msg in self.chat_history:
+            messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
 
         self.worker = ChatWorker(
             appid=self.api_config["APPID"],
@@ -279,7 +291,7 @@ class ChatDialog(QDialog):
             api_secret=self.api_config["APISecret"],
             spark_url=self.api_config["Spark_url"],
             domain=self.api_config["domain"],
-            question=question
+            messages=messages
         )
         self.worker.response_received.connect(self.on_response)
         self.worker.error_occurred.connect(self.on_error)
