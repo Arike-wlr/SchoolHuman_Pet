@@ -8,9 +8,14 @@ from PyQt5.QtGui import QTransform
 from datetime import datetime
 import random
 import json
-import sys
 import markdown
-sys.path.append(os.path.join(os.path.dirname(__file__), 'customized'))
+
+if hasattr(sys, '_MEIPASS'):
+    base_dir = sys._MEIPASS
+else:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+sys.path.append(os.path.join(base_dir, 'customized'))
 from SparkApi2 import main as spark_api_main
 
 
@@ -53,7 +58,7 @@ class ChatDialog(QDialog):
         self.setMinimumSize(500, 400)
 
         self.api_config = self.load_api_config()
-        self.history_dir = os.path.join(os.path.dirname(__file__), 'customized', 'chat_records')
+        self.history_dir = os.path.join(base_dir, 'customized', 'chat_records')
         os.makedirs(self.history_dir, exist_ok=True)
         self.history_file = self.get_latest_history_file()
         self.character_info = self.load_character_info()
@@ -132,7 +137,7 @@ class ChatDialog(QDialog):
         self.load_history()
 
     def load_api_config(self):
-        config_path = os.path.join(os.path.dirname(__file__), 'customized', 'api_config.json')
+        config_path = os.path.join(base_dir, 'customized', 'api_config.json')
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
@@ -141,8 +146,8 @@ class ChatDialog(QDialog):
             return None
 
     def load_character_info(self):
-        info_path = os.path.join(os.path.dirname(__file__), '高校拟人OC_1位角色_2026-07-13.json')
-        bg_path = os.path.join(os.path.dirname(__file__), '南京高校_2026-07-13.json')
+        info_path = os.path.join(base_dir, '高校拟人OC_1位角色_2026-07-13.json')
+        bg_path = os.path.join(base_dir, '南京高校_2026-07-13.json')
         try:
             with open(info_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -340,8 +345,12 @@ class ChatDialog(QDialog):
 class DesktopPet(QWidget):
     def __init__(self, username):
         super().__init__()
-        self.pet_folder = "pet"
-        self.pet_init = f"{self.pet_folder}/pet.png"
+        if hasattr(sys, '_MEIPASS'):
+            self.base_dir = sys._MEIPASS
+        else:
+            self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.pet_folder = os.path.join(self.base_dir, "pet")
+        self.pet_init = os.path.join(self.pet_folder, "pet.png")
         self.SIZE = 500
         self.username = username
         self.initUI()
@@ -353,8 +362,8 @@ class DesktopPet(QWidget):
         self.rotation_angle = 0
         self.middle_dragging = False
         self.middle_drag_start = QPoint(0, 0)
-        self.dizzy_path = f"{self.pet_folder}/dizzy.png"
-        self.happy_path = f"{self.pet_folder}/happy.png"
+        self.dizzy_path = os.path.join(self.pet_folder, "dizzy.png")
+        self.happy_path = os.path.join(self.pet_folder, "happy.png")
 
         self.mood = 100
         self.hunger = 100
@@ -417,7 +426,7 @@ class DesktopPet(QWidget):
         return True
 
     def greet(self):
-        hello_path = f"{self.pet_folder}/hello.png"
+        hello_path = os.path.join(self.pet_folder, "hello.png")
         if self.load_pet_image(hello_path):
             self.bubble.setText(f"""Nice to meet you,\n{self.username}!""")
             self.bubble.move_to(self.pos())
@@ -476,7 +485,7 @@ class DesktopPet(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event):
-        dragged = f"{self.pet_folder}/浙叠版.png"
+        dragged = os.path.join(self.pet_folder, "浙叠版.png")
 
         if self.dragging and event.buttons() == Qt.LeftButton:
             self.move(event.globalPos() - self.drag_pos)
