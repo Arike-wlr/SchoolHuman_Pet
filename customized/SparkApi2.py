@@ -118,7 +118,7 @@ def gen_params(appid, domain, question):
                 "text": [
                     {
                         "role": "user",
-                        "content": question
+                        "content": question[0]["text"] if isinstance(question, list) and len(question) > 0 else str(question)
                     }
                 ]
             }

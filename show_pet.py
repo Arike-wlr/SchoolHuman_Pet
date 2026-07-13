@@ -56,6 +56,7 @@ class ChatDialog(QDialog):
         self.history_dir = os.path.join(os.path.dirname(__file__), 'customized', 'chat_records')
         os.makedirs(self.history_dir, exist_ok=True)
         self.history_file = self.get_latest_history_file()
+        self.character_info = self.load_character_info()
 
         self.layout = QVBoxLayout(self)
 
@@ -127,6 +128,7 @@ class ChatDialog(QDialog):
 
         self.chat_history = []
         self.is_first_response = False
+        self.history_html = ""
         self.load_history()
 
     def load_api_config(self):
@@ -138,13 +140,61 @@ class ChatDialog(QDialog):
             print(f"Failed to load API config: {e}")
             return None
 
+    def load_character_info(self):
+        info_path = os.path.join(os.path.dirname(__file__), '高校拟人OC_1位角色_2026-07-13.json')
+        try:
+            with open(info_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data:
+                    char = data[0]
+                    return f"""你现在扮演宁瑾诚，南京大学意识体。
+姓名：{char['姓名']}
+性别：{char['性别']}
+身高：{char['身高']}
+生日：{char['生日']}
+代表高校：{char['代表高校']}
+地区：{char['地区']}
+外貌：{char['外貌']}
+性格：温柔细心但有些腹黑，是弟妹控，关心同在南京的弟弟妹妹们。喜欢猫猫，喜欢rua猫，也喜欢被猫rua。喜欢甜食，是那种学术会议上盯着茶歇狂吃的类型。对天文地理和古籍感兴趣，也很会研究计算机。心思比较敏感，很容易被勾起对金大央大的回忆。很恋家。
+设定：{char['设定']}
+
+请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"""
+        except Exception as e:
+            print(f"Failed to load character info: {e}")
+            return ""
+
     def get_latest_history_file(self):
         try:
             files = [f for f in os.listdir(self.history_dir) if f.endswith('.json')]
+            print(f"DEBUG: Found {len(files)} files: {files}")
             if not files:
+                print("DEBUG: No files found, creating new")
                 return self.create_new_history_file()
-            files.sort(reverse=True)
-            return os.path.join(self.history_dir, files[0])
+            latest_file = None
+            latest_mtime = 0
+            for f in files:
+                file_path = os.path.join(self.history_dir, f)
+                if os.path.isfile(file_path):
+                    mtime = os.path.getmtime(file_path)
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                        latest_file = f
+            if not latest_file:
+                print("DEBUG: No valid file found, creating new")
+                return self.create_new_history_file()
+            file_path = os.path.join(self.history_dir, latest_file)
+            print(f"DEBUG: Latest file: {latest_file}, mtime: {latest_mtime}")
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        print(f"DEBUG: Valid JSON, returning {file_path}")
+                        return file_path
+                    else:
+                        print(f"DEBUG: Not a list, creating new")
+            except Exception as e:
+                print(f"DEBUG: Failed to load JSON: {e}, creating new")
+            return self.create_new_history_file()
         except Exception as e:
             print(f"Failed to get latest history file: {e}")
             return self.create_new_history_file()
@@ -197,6 +247,7 @@ class ChatDialog(QDialog):
         self.input_field.clear()
         self.send_button.setEnabled(False)
         self.input_field.setEnabled(False)
+        self.new_conv_button.setEnabled(False)
         self.is_first_response = True
 
         if not self.api_config:
@@ -210,7 +261,10 @@ class ChatDialog(QDialog):
             role_prefix = "User: " if msg["role"] == "user" else "Pet: "
             history_text += role_prefix + msg["content"] + "\n"
 
-        full_question = history_text + f"User: {text}"
+        if self.character_info:
+            full_question = f"{self.character_info}\n\n{history_text}User: {text}"
+        else:
+            full_question = history_text + f"User: {text}"
 
         question = [
             {
@@ -236,7 +290,9 @@ class ChatDialog(QDialog):
         color = "#0078D7" if is_user else "#2ECC71"
         prefix = "You" if is_user else "Pet"
         html_content = markdown.markdown(content)
-        self.chat_area.append(f'<b><span style="color:{color}">{prefix}:</span></b><br>{html_content}')
+        msg_html = f'<b><span style="color:{color}">{prefix}:</span></b><br>{html_content}'
+        self.history_html += msg_html + "<br>"
+        self.chat_area.append(msg_html)
 
     def on_response(self, content, finished):
         if self.is_first_response:
@@ -247,22 +303,23 @@ class ChatDialog(QDialog):
         else:
             self.current_response += content
             html_content = markdown.markdown(self.current_response)
-            cursor = self.chat_area.textCursor()
-            cursor.select(cursor.Document)
-            cursor.removeSelectedText()
-            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}')
+            pet_html = f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}'
+            self.chat_area.setHtml(self.history_html + pet_html)
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
         if finished:
+            self.history_html += f'<b><span style="color:#2ECC71">Pet:</span></b><br>{markdown.markdown(self.current_response)}<br>'
             self.chat_history.append({"role": "assistant", "content": self.current_response})
             self.save_history()
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
+            self.new_conv_button.setEnabled(True)
             self.input_field.setFocus()
 
     def on_error(self, error_msg):
         self.append_message("System", f"Error: {error_msg}", is_user=False)
         self.send_button.setEnabled(True)
         self.input_field.setEnabled(True)
+        self.new_conv_button.setEnabled(True)
 
     def on_worker_finished(self):
         pass
@@ -467,8 +524,12 @@ class DesktopPet(QWidget):
         QTimer.singleShot(3000, self.bubble.hide)
 
     def open_chat(self):
-        self.chat_dialog = ChatDialog(self, self.username)
-        self.chat_dialog.show()
+        if hasattr(self, 'chat_dialog') and self.chat_dialog.isVisible():
+            self.chat_dialog.raise_()
+            self.chat_dialog.activateWindow()
+        else:
+            self.chat_dialog = ChatDialog(self, self.username)
+            self.chat_dialog.show()
 
     def show_context_menu(self, pos):
         menu = QMenu(self)
