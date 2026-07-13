@@ -32,3 +32,4 @@ customized/chat_records/
 build/
 dist/
 *.spec
+*.lnk
