@@ -10,9 +10,11 @@ import ssl
 from datetime import datetime
 from time import mktime
 from urllib.parse import urlencode
-from wsgiref.handlers import format_date_time
 
 import websocket
+
+def format_date_time(timestamp):
+    return datetime.utcfromtimestamp(timestamp).strftime('%a, %d %b %Y %H:%M:%S GMT')
 
 class Ws_Param(object):
     def __init__(self, APPID, APIKey, APISecret, Spark_url):
