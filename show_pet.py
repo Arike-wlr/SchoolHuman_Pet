@@ -12,8 +12,35 @@ import markdown
 
 if hasattr(sys, '_MEIPASS'):
     base_dir = sys._MEIPASS
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 else:
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    exe_dir = base_dir
+
+APP_DATA_DIR = os.path.join(exe_dir, 'data')
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+
+def migrate_old_records():
+    old_history_dir = os.path.join(base_dir, 'customized', 'chat_records')
+    new_history_dir = os.path.join(APP_DATA_DIR, 'chat_records')
+    os.makedirs(new_history_dir, exist_ok=True)
+    
+    if os.path.exists(old_history_dir):
+        for f in os.listdir(old_history_dir):
+            if f.startswith('chat_') and f.endswith('.json'):
+                old_path = os.path.join(old_history_dir, f)
+                new_path = os.path.join(new_history_dir, f)
+                if not os.path.exists(new_path):
+                    try:
+                        with open(old_path, 'r', encoding='utf-8') as src:
+                            data = json.load(src)
+                        with open(new_path, 'w', encoding='utf-8') as dst:
+                            json.dump(data, dst, ensure_ascii=False, indent=2)
+                        print(f"Migrated: {f}")
+                    except Exception as e:
+                        print(f"Failed to migrate {f}: {e}")
+
+migrate_old_records()
 
 sys.path.append(os.path.join(base_dir, 'customized'))
 from SparkApi2 import main as spark_api_main
@@ -58,7 +85,7 @@ class ChatDialog(QDialog):
         self.setMinimumSize(500, 400)
 
         self.api_config = self.load_api_config()
-        self.history_dir = os.path.join(base_dir, 'customized', 'chat_records')
+        self.history_dir = os.path.join(APP_DATA_DIR, 'chat_records')
         os.makedirs(self.history_dir, exist_ok=True)
         self.history_file = self.get_latest_history_file()
         self.character_info = self.load_character_info()

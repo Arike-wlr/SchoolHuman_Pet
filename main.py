@@ -3,7 +3,10 @@ import os
 from PyQt5.QtWidgets import QApplication, QInputDialog
 from show_pet import DesktopPet
 
-USERINFO_FILE = "userinfo.txt"
+exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+APP_DATA_DIR = os.path.join(exe_dir, 'data')
+os.makedirs(APP_DATA_DIR, exist_ok=True)
+USERINFO_FILE = os.path.join(APP_DATA_DIR, "userinfo.txt")
 
 
 def get_username():
