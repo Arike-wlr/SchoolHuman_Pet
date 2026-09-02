@@ -364,10 +364,20 @@ class ChatDialog(QDialog):
         if cls._roles_index_cache is not None:
             return cls._roles_index_cache
         if not os.path.exists(cls.MASTER_ROLES_FILE):
-            return {}
+            return {"by_school": {}, "by_name": {}, "by_alias": {}}
         try:
-            with open(cls.MASTER_ROLES_FILE, 'r', encoding='utf-8-sig') as f:
-                data = json.load(f)
+            # 尝试多种编码 (utf-8-sig → utf-8 → gb18030 → gbk)，容忍坏字符
+            data = None
+            for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+                try:
+                    with open(cls.MASTER_ROLES_FILE, 'r', encoding=enc, errors='ignore') as f:
+                        content = f.read()
+                    data = json.loads(content)
+                    break
+                except Exception:
+                    continue
+            if data is None:
+                raise ValueError("Unable to parse master roles JSON with any supported encoding")
             index = {"by_school": {}, "by_name": {}, "by_alias": {}}
             for item in data:
                 school = item.get("代表高校", "")
@@ -387,12 +397,15 @@ class ChatDialog(QDialog):
             return index
         except Exception as e:
             print(f"Failed to load master roles: {e}")
-            return {}
+            return {"by_school": {}, "by_name": {}, "by_alias": {}}
 
     def detect_mentioned_personas(self, text):
         """三层匹配：简称/全称/人名/别名/昵称。返回 (角色信息, 命中方式) 列表。"""
         idx = self.get_roles_index()
         hits = []
+        # 防御：如果索引加载失败，返回空列表
+        if not isinstance(idx, dict) or "by_school" not in idx:
+            return hits
         seen_ids = set()
 
         def add_hit(item, way):

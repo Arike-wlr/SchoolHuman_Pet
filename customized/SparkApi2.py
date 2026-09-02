@@ -119,10 +119,35 @@ def on_message(ws, message):
             ws.close()
 
 
+def _to_spark_text(messages):
+    """将 OpenAI-style messages / 字符串 / 其他格式统一转为 Spark message.text 格式。"""
+    if isinstance(messages, list):
+        converted = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                if "type" in msg and "text" in msg:
+                    # 已是 Spark 格式
+                    converted.append(msg)
+                elif "content" in msg:
+                    # OpenAI 格式: role/content -> Spark type/text
+                    converted.append({"type": "text", "text": msg["content"]})
+                elif "text" in msg:
+                    converted.append({"type": "text", "text": msg["text"]})
+                else:
+                    converted.append({"type": "text", "text": str(msg)})
+            elif isinstance(msg, str):
+                converted.append({"type": "text", "text": msg})
+            else:
+                converted.append({"type": "text", "text": str(msg)})
+        return converted
+    if isinstance(messages, str):
+        return [{"type": "text", "text": messages}]
+    return messages
+
 def gen_params(appid, domain, messages, functions=None):
     payload = {
         "message": {
-            "text": messages
+            "text": _to_spark_text(messages)
         }
     }
     if functions is not None:

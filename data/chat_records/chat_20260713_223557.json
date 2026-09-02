@@ -62,5 +62,25 @@
   {
     "role": "user",
     "content": "何意味"
+  },
+  {
+    "role": "user",
+    "content": "你好"
+  },
+  {
+    "role": "user",
+    "content": "还好吗"
+  },
+  {
+    "role": "assistant",
+    "content": "Error: 10006"
+  },
+  {
+    "role": "user",
+    "content": "还好吗"
+  },
+  {
+    "role": "assistant",
+    "content": "Error: 10006"
   }
 ]
