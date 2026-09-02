@@ -44,73 +44,146 @@ migrate_old_records()
 
 sys.path.append(os.path.join(base_dir, 'customized'))
 from SparkApi2 import main as spark_api_main
+from OpenRouterApi import main as openrouter_main
 from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
 
 
 class ChatWorker(QThread):
-    """两轮对话 Worker：第一轮发送带 functions 的请求，
-    收到 function_call → 本地查询 → 第二轮 send_followup → 最终回复 emit 给 UI。"""
+    """两轮对话 Worker（OpenRouter / Spark 双支持）。
+    第一轮：发送带 tools 的请求 → 正常回复或 function_call
+    收到 function_call → 本地查询 → 第二轮 → 最终回复 emit 给 UI。"""
     response_received = pyqtSignal(str, bool)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, appid, api_key, api_secret, spark_url, domain, messages,
-                 functions=None, lookup_fn=None):
+    def __init__(self, provider, messages, functions=None, lookup_fn=None, **kwargs):
+        """
+        provider: 'openrouter' 或 'spark'
+        messages: OpenAI-style message list
+        functions: tool 声明
+        lookup_fn: 本地查询函数
+        kwargs: provider 所需参数（openrouter→api_key/model；spark→appid/api_key/api_secret/spark_url/domain）
+        """
         super().__init__()
-        self.appid = appid
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.spark_url = spark_url
-        self.domain = domain
+        self.provider = provider
         self.messages = messages
         self.functions = functions
         self.lookup_fn = lookup_fn
+        self.kwargs = kwargs
 
-    def on_response(self, content, finished):
-        self.response_received.emit(content, finished)
+    def _do_round(self, messages):
+        """执行一轮请求（OpenRouter）。返回 (content, tool_calls, is_final)。"""
+        import requests
+        api_key = self.kwargs.get('api_key')
+        model = self.kwargs.get('model', 'deepseek/deepseek-chat-v3.1:free')
+        tools = None
+        if self.functions is not None:
+            if isinstance(self.functions, dict) and "name" in self.functions:
+                tools = [{"type": "function", "function": self.functions}]
+            elif isinstance(self.functions, list):
+                tools = [{"type": "function", "function": f} for f in self.functions]
 
-    def on_tool_call(self, call_info):
-        """收到服务端 function_call：本地查询 → 构造第二轮 → send_followup。"""
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://schoolhumanpet.app",
+            "X-Title": "SchoolHumanPet"
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 4096,
+            "stream": True
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        chunk_buf = ""
+        tool_calls_buf = []   # 流式收集 tool_calls
+
+        def emit_chunk(text, is_finished=False):
+            self.response_received.emit(text, is_finished)
+
         try:
-            name = call_info.get("name", "") if isinstance(call_info, dict) else ""
-            raw_args = call_info.get("arguments", "{}") if isinstance(call_info, dict) else "{}"
-            if isinstance(raw_args, str):
-                args = json.loads(raw_args)
-            else:
-                args = raw_args
-            query = args.get("query", "")
-            print(f"[ToolCall] 函数={name}, 查询={query}")
-            result = self.lookup_fn(query) if self.lookup_fn else f"未找到（关键词：{query}）"
-            tool_msg = {"role": "tool", "content": result}
-            followup_messages = self.messages + [tool_msg]
-            spark_api_main(
-                appid=self.appid,
-                api_key=self.api_key,
-                api_secret=self.api_secret,
-                Spark_url=self.spark_url,
-                domain=self.domain,
-                messages=followup_messages,
-                on_response=self.on_response,
-                functions=self.functions
+            r = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers, json=payload, stream=True, timeout=90
             )
         except Exception as e:
-            print(f"[ToolCall] 处理出错: {e}")
-            self.error_occurred.emit(f"工具调用错误: {e}")
+            self.error_occurred.emit(f"请求失败: {e}")
+            return "", [], True
+
+        if r.status_code != 200:
+            err = r.text[:500]
+            print(f"[OpenRouter] HTTP {r.status_code}: {err}")
+            self.error_occurred.emit(f"API Error: {r.status_code}")
+            return "", [], True
+
+        chunk_buf = ""
+        tool_calls_buf = []
+
+        for line in r.iter_lines():
+            if not line:
+                continue
+            line = line.decode('utf-8', errors='ignore')
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str == "[DONE]":
+                break
+            try:
+                obj = json.loads(data_str)
+            except:
+                continue
+            delta = obj.get("choices", [{}])[0].get("delta", {})
+            chunk_text = delta.get("content") or ""
+            if chunk_text:
+                chunk_buf += chunk_text
+                emit_chunk(chunk_text)
+            for tc in (delta.get("tool_calls") or []):
+                fn = tc.get("function", {})
+                idx = tc.get("index", len(tool_calls_buf))
+                while len(tool_calls_buf) <= idx:
+                    tool_calls_buf.append({"name": "", "arguments": ""})
+                if fn.get("name"):
+                    tool_calls_buf[idx]["name"] += fn["name"]
+                if fn.get("arguments"):
+                    tool_calls_buf[idx]["arguments"] += fn["arguments"]
+
+        # 不在此发 finished；run() 在所有轮结束后统一发
+        return chunk_buf, tool_calls_buf, False
 
     def run(self):
-        try:
-            spark_api_main(
-                appid=self.appid,
-                api_key=self.api_key,
-                api_secret=self.api_secret,
-                Spark_url=self.spark_url,
-                domain=self.domain,
-                messages=self.messages,
-                on_response=self.on_response,
-                functions=self.functions,
-                on_tool_call=self.on_tool_call
-            )
-        except Exception as e:
-            self.error_occurred.emit(str(e))
+        content, tool_calls, _ = self._do_round(self.messages)
+        if tool_calls and self.lookup_fn:
+            # 第二轮：执行工具 + 追加 tool 消息
+            for tc in tool_calls:
+                name = tc.get("name", "")
+                raw_args = tc.get("arguments", "{}")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except:
+                    args = {"query": raw_args}
+                query = args.get("query", "")
+                print(f"[ToolCall] 函数={name}, 查询={query}")
+                result = self.lookup_fn(query)
+                tool_msg = {
+                    "role": "tool",
+                    "content": result,
+                    "tool_call_id": f"call_{id(tc)}"
+                }
+                assistant_msg = {"role": "assistant", "content": content}
+                if name:
+                    raw_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+                    assistant_msg["tool_calls"] = [
+                        {"id": f"call_{id(tc)}", "type": "function",
+                         "function": {"name": name, "arguments": raw_str}}
+                    ]
+                followup = self.messages + [assistant_msg, tool_msg]
+                self._do_round(followup)
+        # 所有轮次结束，发 finished 信号（UI 统一在此重置）
+        self.response_received.emit("", True)
 
 
 class ChatDialog(QDialog):
@@ -365,16 +438,28 @@ class ChatDialog(QDialog):
                 "content": msg["content"]
             })
 
-        self.worker = ChatWorker(
-            appid=self.api_config["APPID"],
-            api_key=self.api_config["APIKey"],
-            api_secret=self.api_config["APISecret"],
-            spark_url=self.api_config["Spark_url"],
-            domain=self.api_config["domain"],
-            messages=messages,
-            functions=SCHOOL_PERSONA_TOOL,
-            lookup_fn=lookup_persona
-        )
+        # 使用 OpenRouter（如果配置存在且有效），否则回退到星火
+        openrouter_cfg = self.api_config.get("openrouter") if self.api_config else None
+        if openrouter_cfg and openrouter_cfg.get("api_key"):
+            self.worker = ChatWorker(
+                provider="openrouter",
+                messages=messages,
+                functions=SCHOOL_PERSONA_TOOL,
+                lookup_fn=lookup_persona,
+                api_key=openrouter_cfg["api_key"],
+                model=openrouter_cfg.get("model", "deepseek/deepseek-chat-v3.1:free")
+            )
+        else:
+            self.worker = ChatWorker(
+                provider="spark",
+                messages=messages,
+                functions=SCHOOL_PERSONA_TOOL,
+                lookup_fn=lookup_persona,
+                api_key=self.api_config.get("APIKey"),
+                api_secret=self.api_config.get("APISecret"),
+                spark_url=self.api_config.get("Spark_url"),
+                domain=self.api_config.get("domain")
+            )
         self.worker.response_received.connect(self.on_response)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.finished.connect(self.on_worker_finished)

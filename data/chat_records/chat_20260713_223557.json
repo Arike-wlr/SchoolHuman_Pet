@@ -66,5 +66,73 @@
   {
     "role": "assistant",
     "content": "Error: 10006"
+  },
+  {
+    "role": "user",
+    "content": "啊啊啊？"
+  },
+  {
+    "role": "assistant",
+    "content": "别激动呀，我是说你给我的感觉像一只可爱的大橘猫呢。每次和你聊天都感觉特别轻松愉快，就好像有只慵懒又俏皮的大橘猫在身边一样。你不喜欢这个说法吗😹？"
+  },
+  {
+    "role": "user",
+    "content": "这话不是我说的吗"
+  },
+  {
+    "role": "assistant",
+    "content": "哎呀，是我理解错了呢。我还以为你说我喜欢你的说法，就像一只可爱的猫咪一样可爱😉。不过没关系啦，无论你说什么，我都会认真听的。那你想和我说什么呢？😺"
+  },
+  {
+    "role": "user",
+    "content": "你好可爱"
+  },
+  {
+    "role": "user",
+    "content": "很可爱"
+  },
+  {
+    "role": "user",
+    "content": "喂喂喂"
+  },
+  {
+    "role": "user",
+    "content": "hi"
+  },
+  {
+    "role": "user",
+    "content": "h"
+  },
+  {
+    "role": "user",
+    "content": "h"
+  },
+  {
+    "role": "assistant",
+    "content": "在呢在呢~怎么啦？发这么多消息，是不是想我了呀？😊\n\n虽然我有时候可能会稍微慢一点回复，但我一直都在哦。有什么想聊的尽管说~"
+  },
+  {
+    "role": "user",
+    "content": "你是谁？"
+  },
+  {
+    "role": "assistant",
+    "content": ""
+  },
+  {
+    "role": "user",
+    "content": "你是谁？"
+  },
+  {
+    "role": "assistant",
+    "content": "我是宁瑾诚呀，南京大学的意识体。有什么想和我聊的吗？😊"
+  },
+  {
+    "role": "user",
+    "content": "你认识秦思远吗"
+  },
+  {
+    "role": "assistant",
+    "content": "秦思远嘛，当然认识啦！他是西安交通大学的意识体，也是咱们家族里的重要成员呢。\n\n说起来，西安交通大学可是非常有名的学校，工科特别强，尤其是在能源、机械这些领域。思远他性子稳重，做事踏实，是个很有担当的孩子。\n\n你是西安交通大学的朋友吗？还是对西安交通大学感兴趣呀？😊"
   }
 ]
