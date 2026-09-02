@@ -101,7 +101,14 @@ def on_message(ws, message):
                 ws.close()
 
 
-def gen_params(appid, domain, messages):
+def gen_params(appid, domain, messages, functions=None):
+    payload = {
+        "message": {
+            "text": messages
+        }
+    }
+    if functions is not None:
+        payload["functions"] = functions
     data = {
         "header": {
             "app_id": appid,
@@ -115,11 +122,7 @@ def gen_params(appid, domain, messages):
                 "top_k": 6,
             }
         },
-        "payload": {
-            "message": {
-                "text": messages
-            }
-        }
+        "payload": payload
     }
     return data
 

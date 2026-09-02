@@ -283,6 +283,93 @@ class ChatDialog(QDialog):
         self.save_history()
         event.accept()
 
+    # 主角色数据库文件（你存放70+角色的实际文件）
+    MASTER_ROLES_FILE = os.path.join(base_dir, "高校拟人OC_1位角色_2026-07-13.json")
+
+    _roles_index_cache = None  # 类级缓存，索引只构建一次
+
+    @classmethod
+    def get_roles_index(cls):
+        """从主 JSON 构建：{代表高校: 角色信息}, {姓名: 角色信息}, {别名/昵称: 角色信息} 三重索引。"""
+        if cls._roles_index_cache is not None:
+            return cls._roles_index_cache
+        if not os.path.exists(cls.MASTER_ROLES_FILE):
+            return {}
+        try:
+            with open(cls.MASTER_ROLES_FILE, 'r', encoding='utf-8-sig') as f:
+                data = json.load(f)
+            index = {"by_school": {}, "by_name": {}, "by_alias": {}}
+            for item in data:
+                school = item.get("代表高校", "")
+                name = item.get("姓名", "")
+                alias = item.get("别名", "")
+                if school:
+                    index["by_school"][school] = item
+                if name:
+                    index["by_name"][name] = item
+                # 别名/昵称可能多个，逗号或顿号分隔
+                if alias:
+                    for a in alias.replace("，", ",").split(","):
+                        a = a.strip()
+                        if a:
+                            index["by_alias"][a] = item
+            cls._roles_index_cache = index
+            return index
+        except Exception as e:
+            print(f"Failed to load master roles: {e}")
+            return {}
+
+    def detect_mentioned_personas(self, text):
+        """三层匹配：简称/全称/人名/别名/昵称。返回 (角色信息, 命中方式) 列表。"""
+        idx = self.get_roles_index()
+        hits = []
+        seen_ids = set()
+
+        def add_hit(item, way):
+            # 用 id() 避免重复添加同一角色
+            if id(item) in seen_ids:
+                return
+            seen_ids.add(id(item))
+            hits.append((item, way))
+
+        # 1) 学校名匹配（简称 + 全称）
+        for school, item in idx["by_school"].items():
+            if school in text:
+                add_hit(item, f"校名:{school}")
+            # 简称匹配：取 "南京XX大学" 中 "XX" 部分
+            short = school.replace("南京", "").replace("大学", "").replace("学院", "")
+            if short and short in text and len(short) >= 2:
+                add_hit(item, f"简称:{short}")
+
+        # 2) 人名匹配
+        for name, item in idx["by_name"].items():
+            if name and name in text:
+                add_hit(item, f"人名:{name}")
+
+        # 3) 别名/昵称匹配
+        for alias, item in idx["by_alias"].items():
+            if alias and alias in text:
+                add_hit(item, f"别名:{alias}")
+
+        return hits
+
+    def build_enhanced_system_prompt(self, base_prompt, user_text):
+        """在基础设定上附加用户提到的角色数据。"""
+        hits = self.detect_mentioned_personas(user_text)
+        if not hits:
+            return base_prompt
+
+        extra = "\n\n【本轮参考信息】用户提到了以下角色（你仍以宁瑾诚/南大身份回应）：\n\n"
+        for item, way in hits:
+            school = item.get("代表高校", "?")
+            name = item.get("姓名", "?")
+            extra += f"--- {school}（{name}）| 匹配方式: {way} ---\n"
+            setting = item.get("设定", "")
+            # 截取关键摘要，避免 token 爆炸
+            snippet = setting[:400] + ("..." if len(setting) > 400 else "")
+            extra += f"设定摘要：{snippet}\n\n"
+        return base_prompt + extra
+
     def send_message(self):
         text = self.input_field.text().strip()
         if not text:
@@ -304,13 +391,15 @@ class ChatDialog(QDialog):
             return
 
         messages = []
-        
+
         if self.character_info:
+            # 动态增强 system prompt
+            enhanced_prompt = self.build_enhanced_system_prompt(self.character_info, text)
             messages.append({
                 "role": "system",
-                "content": self.character_info
+                "content": enhanced_prompt
             })
-        
+
         for msg in self.chat_history:
             messages.append({
                 "role": msg["role"],
