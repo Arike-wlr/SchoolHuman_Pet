@@ -10,6 +10,9 @@ import random
 import json
 import markdown
 
+# Method B 工具调用
+from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
+
 if hasattr(sys, '_MEIPASS'):
     base_dir = sys._MEIPASS
     exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -47,10 +50,17 @@ from SparkApi2 import main as spark_api_main
 
 
 class ChatWorker(QThread):
+    """Method B 两轮对话 Worker。
+
+    第一轮：发送带 functions 声明的请求。
+    若收到 function_call 触发 → 本地查 JSON → 自动发起第二轮 → 最终回复 emit 给 UI。
+    若直接收到正常回复 → 直接 emit 给 UI。
+    """
     response_received = pyqtSignal(str, bool)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, appid, api_key, api_secret, spark_url, domain, messages):
+    def __init__(self, appid, api_key, api_secret, spark_url, domain, messages,
+                 functions=None, lookup_fn=None):
         super().__init__()
         self.appid = appid
         self.api_key = api_key
@@ -58,9 +68,53 @@ class ChatWorker(QThread):
         self.spark_url = spark_url
         self.domain = domain
         self.messages = messages
+        self.functions = functions
+        self.lookup_fn = lookup_fn   # lookup_persona 函数
 
     def on_response(self, content, finished):
         self.response_received.emit(content, finished)
+
+    def on_tool_call(self, call_info):
+        """收到服务端 function_call 触发：执行本地查询，构造第二轮消息。"""
+        try:
+            # 解析 call_info，提取 query 参数
+            # 讯飞格式可能是 {"name": "...", "arguments": "{\"query\":\"...\"}"}
+            name = call_info.get("name", "")
+            raw_args = call_info.get("arguments", "{}")
+            if isinstance(raw_args, str):
+                args = json.loads(raw_args)
+            else:
+                args = raw_args
+            query = args.get("query", "")
+
+            print(f"[ToolCall] 函数={name}, 查询={query}")
+            if self.lookup_fn:
+                result = self.lookup_fn(query)
+            else:
+                result = f"未找到角色信息（关键词：{query}）"
+
+            # 构造第二轮消息：把 tool 返回结果追加进去
+            # role 为 tool，代表 tool 函数的返回值
+            tool_msg = {
+                "role": "tool",
+                "content": result
+            }
+            followup_messages = self.messages + [tool_msg]
+
+            # 发起第二轮请求（同一 ws，不重连）
+            spark_api_main(
+                appid=self.appid,
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                Spark_url=self.spark_url,
+                domain=self.domain,
+                messages=followup_messages,
+                on_response=self.on_response,
+                functions=self.functions   # 第二轮仍声明 functions（可能还有后续调用）
+            )
+        except Exception as e:
+            print(f"[ToolCall] 处理出错: {e}")
+            self.error_occurred.emit(f"工具调用错误: {e}")
 
     def run(self):
         try:
@@ -71,7 +125,9 @@ class ChatWorker(QThread):
                 Spark_url=self.spark_url,
                 domain=self.domain,
                 messages=self.messages,
-                on_response=self.on_response
+                on_response=self.on_response,
+                functions=self.functions,
+                on_tool_call=self.on_tool_call
             )
         except Exception as e:
             self.error_occurred.emit(str(e))
@@ -173,39 +229,53 @@ class ChatDialog(QDialog):
             return None
 
     def load_character_info(self):
-        info_path = os.path.join(base_dir, '高校拟人OC_1位角色_2026-07-13.json')
-        bg_path = os.path.join(base_dir, '南京高校_2026-07-13.json')
+        info_path = os.path.join(base_dir, '高校拟人角色.json')
         try:
-            with open(info_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            with open(info_path, 'r', encoding='gbk', errors='ignore') as f:
+                raw = f.read()
+                close_idx = raw.find(']')
+                if close_idx != -1:
+                    raw = raw[:close_idx+1]
+                data = json.loads(raw)
                 if data:
-                    char = data[0]
+                    # 显式查找南大角色（宁瑾诚），而不是取第一条
+                    char = None
+                    for item in data:
+                        if item.get('姓名') == '宁瑾诚' or item.get('代表高校') == '南京大学':
+                            char = item
+                            break
+                    if char is None:
+                        char = data[0]  # 兜底
                     character_text = f"""你现在扮演宁瑾诚，南京大学意识体。
-姓名：{char['姓名']}
-性别：{char['性别']}
-身高：{char['身高']}
-生日：{char['生日']}
-代表高校：{char['代表高校']}
-地区：{char['地区']}
-外貌：{char['外貌']}
-性格：温柔细心但有些腹黑，是弟妹控，关心同在南京的弟弟妹妹们。喜欢猫猫，喜欢rua猫，也喜欢被猫rua。喜欢甜食，是那种学术会议上盯着茶歇狂吃的类型。对天文地理和古籍感兴趣，也很会研究计算机。心思比较敏感，很容易被勾起对金大央大的回忆。很恋家。
-设定：{char['设定']}"""
+姓名：{char.get('姓名', '')}
+性别：{char.get('性别', '')}
+身高：{char.get('身高', '')}
+生日：{char.get('生日', '')}
+代表高校：{char.get('代表高校', '')}
+地区：{char.get('地区', '')}
+外貌：{char.get('外貌', '')}
+设定：{char.get('设定', '')}"""
             
             bg_text = ""
             try:
-                with open(bg_path, 'r', encoding='utf-8') as f:
-                    bg_data = json.load(f)
-                    if bg_data:
-                        family_members = []
-                        for member in bg_data:
-                            status = member.get('存在状态', '')
-                            if status == '存在':
-                                family_members.append(f"{member['姓名']}（{member['代表高校']}）")
-                        bg_text = f"\n\n家族成员（当前存在）：{'、'.join(family_members)}\n\n注意：当提到其他南京高校时，请参考以上背景设定。"
+                family_members = []
+                for member in data:
+                    if member.get('姓名') == char.get('姓名'):
+                        continue
+                    status = member.get('存在状态', '')
+                    if status == '存在':
+                        family_members.append(f"{member.get('姓名', '?')}（{member.get('代表高校', '?')}）")
+                if family_members:
+                    bg_text = f"\n\n家族成员（当前存在）：{'、'.join(family_members)}\n\n注意：当提到其他南京高校时，请参考以上背景设定。"
             except Exception as e:
-                print(f"Failed to load background info: {e}")
-            
-            return character_text + bg_text + "\n\n请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"
+                print(f"Failed to load family info: {e}")
+
+            return character_text + bg_text + """
+
+【工具使用规则】
+当用户提到你认识的其他高校（如东南大学、南师大、南农、河海、南航、南理、南邮等）或提到你家族中的具体成员（如瑾韵、瑜敏、焕秾、焕郁、沧淼、灼毅、霁明等），你应主动调用工具 get_school_persona(query) 查询对方的详细设定，再以宁瑾诚（南大）的口吻回应，始终保持你是南大的身份，不要切换身份。
+
+请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"""
         except Exception as e:
             print(f"Failed to load character info: {e}")
             return ""
@@ -284,7 +354,7 @@ class ChatDialog(QDialog):
         event.accept()
 
     # 主角色数据库文件（你存放70+角色的实际文件）
-    MASTER_ROLES_FILE = os.path.join(base_dir, "高校拟人OC_1位角色_2026-07-13.json")
+    MASTER_ROLES_FILE = os.path.join(base_dir, "高校拟人角色.json")
 
     _roles_index_cache = None  # 类级缓存，索引只构建一次
 
@@ -406,13 +476,16 @@ class ChatDialog(QDialog):
                 "content": msg["content"]
             })
 
+        # 传入方法 B 的函数声明和本地查询函数
         self.worker = ChatWorker(
             appid=self.api_config["APPID"],
             api_key=self.api_config["APIKey"],
             api_secret=self.api_config["APISecret"],
             spark_url=self.api_config["Spark_url"],
             domain=self.api_config["domain"],
-            messages=messages
+            messages=messages,
+            functions=SCHOOL_PERSONA_TOOL,
+            lookup_fn=lookup_persona
         )
         self.worker.response_received.connect(self.on_response)
         self.worker.error_occurred.connect(self.on_error)

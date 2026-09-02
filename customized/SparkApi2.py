@@ -64,7 +64,12 @@ def on_open(ws):
 
 
 def run(ws, *args):
-    data = json.dumps(gen_params(appid=ws.appid, domain=ws.domain, messages=ws.messages))
+    data = json.dumps(gen_params(
+        appid=ws.appid,
+        domain=ws.domain,
+        messages=ws.messages,
+        functions=getattr(ws, 'functions', None)
+    ))
     ws.send(data)
 
 
@@ -76,29 +81,42 @@ def on_message(ws, message):
         if ws.on_response:
             ws.on_response(f"Error: {code}", finished=True)
         ws.close()
+        return
+
+    # === 方式B：函数调用（Tool Call）处理 ===
+    # 服务端要求调用工具时，不返回 choices 而是 function_call / plugin_call
+    payload = data.get('payload', {})
+    if 'function_call' in payload or 'plugin_call' in payload:
+        call_info = payload.get('function_call') or payload.get('plugin_call')
+        # 通知外部执行本地查询
+        if hasattr(ws, 'on_tool_call') and ws.on_tool_call:
+            ws.on_tool_call(call_info)
+        # 不关闭连接，等待第二轮
+        return
+
+    # === 原有 RAG 插件处理 ===
+    if 'plugins' in data['payload']:
+        text_list = data['payload']['plugins']['text']
+        search_refer = text_list[0]
+        refer_content = search_refer['content']
+        refer_list = json.loads(refer_content)
+        ref_text = "参考内容：\n"
+        for line in refer_list:
+            num = line['index']
+            url = line['url']
+            title = line['title']
+            ref_text += str(num) + "、" + title + "[ " + url + " ]\n"
+        if ws.on_response:
+            ws.on_response(ref_text, finished=False)
     else:
-        if 'plugins' in data['payload']:
-            text_list = data['payload']['plugins']['text']
-            search_refer = text_list[0]
-            refer_content = search_refer['content']
-            refer_list = json.loads(refer_content)
-            ref_text = "参考内容：\n"
-            for line in refer_list:
-                num = line['index']
-                url = line['url']
-                title = line['title']
-                ref_text += str(num) + "、" + title + "[ " + url + " ]\n"
-            if ws.on_response:
-                ws.on_response(ref_text, finished=False)
-        else:
-            sid = data["header"]["sid"]
-            choices = data["payload"]["choices"]
-            status = choices["status"]
-            content = choices["text"][0]["content"]
-            if ws.on_response:
-                ws.on_response(content, finished=(status == 2))
-            if status == 2:
-                ws.close()
+        sid = data["header"]["sid"]
+        choices = data["payload"]["choices"]
+        status = choices["status"]
+        content = choices["text"][0]["content"]
+        if ws.on_response:
+            ws.on_response(content, finished=(status == 2))
+        if status == 2:
+            ws.close()
 
 
 def gen_params(appid, domain, messages, functions=None):
@@ -127,7 +145,18 @@ def gen_params(appid, domain, messages, functions=None):
     return data
 
 
-def main(appid, api_key, api_secret, Spark_url, domain, messages, on_response=None):
+def send_followup(ws, messages):
+    """第二轮：向已打开的 WebSocket 发送后续消息（用于 Function Call 结果回传）。"""
+    data = json.dumps(gen_params(
+        appid=ws.appid,
+        domain=ws.domain,
+        messages=messages,
+        functions=getattr(ws, 'functions', None)
+    ))
+    ws.send(data)
+
+
+def main(appid, api_key, api_secret, Spark_url, domain, messages, on_response=None, functions=None, on_tool_call=None):
     wsParam = Ws_Param(appid, api_key, api_secret, Spark_url)
     websocket.enableTrace(False)
     wsUrl = wsParam.create_url()
@@ -136,4 +165,6 @@ def main(appid, api_key, api_secret, Spark_url, domain, messages, on_response=No
     ws.messages = messages
     ws.domain = domain
     ws.on_response = on_response
+    ws.on_tool_call = on_tool_call
+    ws.functions = functions
     ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
