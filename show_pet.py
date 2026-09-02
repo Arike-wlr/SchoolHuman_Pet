@@ -474,18 +474,20 @@ class ChatDialog(QDialog):
         self.chat_area.append(msg_html)
 
     def on_response(self, content, finished):
+        if not content and not finished:
+            return
         if self.is_first_response:
             self.current_response = content
-            html_content = markdown.markdown(content)
-            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}')
+            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>')
+            self.chat_area.insertHtml(markdown.markdown(content))
             self.is_first_response = False
         else:
             self.current_response += content
-            html_content = markdown.markdown(self.current_response)
-            pet_html = f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}'
-            self.chat_area.setHtml(self.history_html + pet_html)
+            # 直接 append 当前 chunk，避免重渲染整个历史（防跳动）
+            self.chat_area.insertHtml(markdown.markdown(content))
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
         if finished:
+            # 完成态：只更新历史缓存
             self.history_html += f'<b><span style="color:#2ECC71">Pet:</span></b><br>{markdown.markdown(self.current_response)}<br>'
             self.chat_history.append({"role": "assistant", "content": self.current_response})
             self.save_history()
