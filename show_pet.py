@@ -341,31 +341,27 @@ class ChatDialog(QDialog):
             if not files:
                 print("DEBUG: No files found, creating new")
                 return self.create_new_history_file()
-            latest_file = None
-            latest_mtime = 0
-            for f in files:
+            # 按文件名日期排序（chat_YYYYMMDD_HHMMSS），更可靠，避免文件系统 mtime 错乱
+            def filename_sort_key(f):
+                # 提取 chat_YYYYMMDD_HHMMSS.json 中的日期部分
+                try:
+                    core = f.replace("chat_", "").replace(".json", "")
+                    # 格式 YYYYMMDD_HHMMSS，按字符串比较即可
+                    return core
+                except:
+                    return f
+            sorted_files = sorted(files, key=filename_sort_key, reverse=True)
+            for f in sorted_files:
                 file_path = os.path.join(self.history_dir, f)
                 if os.path.isfile(file_path):
-                    mtime = os.path.getmtime(file_path)
-                    if mtime > latest_mtime:
-                        latest_mtime = mtime
-                        latest_file = f
-            if not latest_file:
-                print("DEBUG: No valid file found, creating new")
-                return self.create_new_history_file()
-            file_path = os.path.join(self.history_dir, latest_file)
-            print(f"DEBUG: Latest file: {latest_file}, mtime: {latest_mtime}")
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        print(f"DEBUG: Valid JSON, returning {file_path}")
-                        return file_path
-                    else:
-                        print(f"DEBUG: Not a list, creating new")
-            except Exception as e:
-                print(f"DEBUG: Failed to load JSON: {e}, creating new")
-            return self.create_new_history_file()
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as fd:
+                            data = json.load(fd)
+                            if isinstance(data, list):
+                                print(f"DEBUG: Latest by filename: {f}, path={file_path}")
+                                return file_path
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"Failed to get latest history file: {e}")
             return self.create_new_history_file()
