@@ -28,25 +28,15 @@ class Ws_Param(object):
     def create_url(self):
         now = datetime.now()
         date = format_date_time(mktime(now.timetuple()))
-
         signature_origin = "host: " + self.host + "\n"
         signature_origin += "date: " + date + "\n"
         signature_origin += "GET " + self.path + " HTTP/1.1"
-
         signature_sha = hmac.new(self.APISecret.encode('utf-8'), signature_origin.encode('utf-8'),
                                  digestmod=hashlib.sha256).digest()
-
         signature_sha_base64 = base64.b64encode(signature_sha).decode(encoding='utf-8')
-
         authorization_origin = f'api_key="{self.APIKey}", algorithm="hmac-sha256", headers="host date request-line", signature="{signature_sha_base64}"'
-
         authorization = base64.b64encode(authorization_origin.encode('utf-8')).decode(encoding='utf-8')
-
-        v = {
-            "authorization": authorization,
-            "date": date,
-            "host": self.host
-        }
+        v = {"authorization": authorization, "date": date, "host": self.host}
         url = self.Spark_url + '?' + urlencode(v)
         return url
 
@@ -83,19 +73,17 @@ def on_message(ws, message):
         ws.close()
         return
 
-    # === 方式B：函数调用（Tool Call）处理 ===
-    # 服务端要求调用工具时，不返回 choices 而是 function_call / plugin_call
     payload = data.get('payload', {})
+
+    # 方法 B：函数调用 / 插件调用（不关闭连接，配合第二轮）
     if 'function_call' in payload or 'plugin_call' in payload:
         call_info = payload.get('function_call') or payload.get('plugin_call')
-        # 通知外部执行本地查询
         if hasattr(ws, 'on_tool_call') and ws.on_tool_call:
             ws.on_tool_call(call_info)
-        # 不关闭连接，等待第二轮
         return
 
-    # === 原有 RAG 插件处理 ===
-    if 'plugins' in data['payload']:
+    # RAG 插件引用处理
+    if 'plugins' in payload:
         text_list = data['payload']['plugins']['text']
         search_refer = text_list[0]
         refer_content = search_refer['content']
@@ -108,62 +96,30 @@ def on_message(ws, message):
             ref_text += str(num) + "、" + title + "[ " + url + " ]\n"
         if ws.on_response:
             ws.on_response(ref_text, finished=False)
-    else:
-        sid = data["header"]["sid"]
-        choices = data["payload"]["choices"]
-        status = choices["status"]
-        content = choices["text"][0]["content"]
-        if ws.on_response:
-            ws.on_response(content, finished=(status == 2))
-        if status == 2:
-            ws.close()
+        return
 
+    # 正常流式回复
+    sid = data["header"]["sid"]
+    choices = data["payload"]["choices"]
+    status = choices["status"]
+    content = choices["text"][0]["content"]
+    if ws.on_response:
+        ws.on_response(content, finished=(status == 2))
+    if status == 2:
+        ws.close()
 
-def _to_spark_text(messages):
-    """将 OpenAI-style messages / 字符串 / 其他格式统一转为 Spark message.text 格式。"""
-    if isinstance(messages, list):
-        converted = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                if "type" in msg and "text" in msg:
-                    # 已是 Spark 格式
-                    converted.append(msg)
-                elif "content" in msg:
-                    # OpenAI 格式: role/content -> Spark type/text
-                    converted.append({"type": "text", "text": msg["content"]})
-                elif "text" in msg:
-                    converted.append({"type": "text", "text": msg["text"]})
-                else:
-                    converted.append({"type": "text", "text": str(msg)})
-            elif isinstance(msg, str):
-                converted.append({"type": "text", "text": msg})
-            else:
-                converted.append({"type": "text", "text": str(msg)})
-        return converted
-    if isinstance(messages, str):
-        return [{"type": "text", "text": messages}]
-    return messages
 
 def gen_params(appid, domain, messages, functions=None):
     payload = {
-        "message": {
-            "text": _to_spark_text(messages)
-        }
+        "message": {"text": messages}
     }
     if functions is not None:
         payload["functions"] = functions
     data = {
-        "header": {
-            "app_id": appid,
-            "uid": "1234"
-        },
+        "header": {"app_id": appid, "uid": "1234"},
         "parameter": {
-            "chat": {
-                "domain": domain,
-                "temperature": 0.99,
-                "max_tokens": 4 * 1024,
-                "top_k": 6,
-            }
+            "chat": {"domain": domain, "temperature": 0.99,
+                      "max_tokens": 4 * 1024, "top_k": 6}
         },
         "payload": payload
     }
@@ -181,11 +137,16 @@ def send_followup(ws, messages):
     ws.send(data)
 
 
-def main(appid, api_key, api_secret, Spark_url, domain, messages, on_response=None, functions=None, on_tool_call=None):
+def main(appid, api_key, api_secret, Spark_url, domain, messages,
+         on_response=None, functions=None, on_tool_call=None):
     wsParam = Ws_Param(appid, api_key, api_secret, Spark_url)
     websocket.enableTrace(False)
     wsUrl = wsParam.create_url()
-    ws = websocket.WebSocketApp(wsUrl, on_message=on_message, on_error=on_error, on_close=on_close, on_open=on_open)
+    ws = websocket.WebSocketApp(wsUrl,
+                                 on_message=on_message,
+                                 on_error=on_error,
+                                 on_close=on_close,
+                                 on_open=on_open)
     ws.appid = appid
     ws.messages = messages
     ws.domain = domain

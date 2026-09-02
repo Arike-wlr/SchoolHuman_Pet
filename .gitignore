@@ -17,7 +17,7 @@ env/
 *.swp
 *.swo
 *~
-
+data/
 .DS_Store
 Thumbs.db
 

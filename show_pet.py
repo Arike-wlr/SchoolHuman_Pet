@@ -47,90 +47,146 @@ migrate_old_records()
 
 sys.path.append(os.path.join(base_dir, 'customized'))
 from SparkApi2 import main as spark_api_main
+from OpenRouterApi import main as openrouter_main
+from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
 
 
 class ChatWorker(QThread):
-    """Method B 两轮对话 Worker。
-
-    第一轮：发送带 functions 声明的请求。
-    若收到 function_call 触发 → 本地查 JSON → 自动发起第二轮 → 最终回复 emit 给 UI。
-    若直接收到正常回复 → 直接 emit 给 UI。
-    """
+    """两轮对话 Worker（OpenRouter / Spark 双支持）。
+    第一轮：发送带 tools 的请求 → 正常回复或 function_call
+    收到 function_call → 本地查询 → 第二轮 → 最终回复 emit 给 UI。"""
     response_received = pyqtSignal(str, bool)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, appid, api_key, api_secret, spark_url, domain, messages,
-                 functions=None, lookup_fn=None):
+    def __init__(self, provider, messages, functions=None, lookup_fn=None, **kwargs):
+        """
+        provider: 'openrouter' 或 'spark'
+        messages: OpenAI-style message list
+        functions: tool 声明
+        lookup_fn: 本地查询函数
+        kwargs: provider 所需参数（openrouter→api_key/model；spark→appid/api_key/api_secret/spark_url/domain）
+        """
         super().__init__()
-        self.appid = appid
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.spark_url = spark_url
-        self.domain = domain
+        self.provider = provider
         self.messages = messages
         self.functions = functions
-        self.lookup_fn = lookup_fn   # lookup_persona 函数
+        self.lookup_fn = lookup_fn
+        self.kwargs = kwargs
 
-    def on_response(self, content, finished):
-        self.response_received.emit(content, finished)
+    def _do_round(self, messages):
+        """执行一轮请求（OpenRouter）。返回 (content, tool_calls, is_final)。"""
+        import requests
+        api_key = self.kwargs.get('api_key')
+        model = self.kwargs.get('model', 'deepseek/deepseek-chat-v3.1:free')
+        tools = None
+        if self.functions is not None:
+            if isinstance(self.functions, dict) and "name" in self.functions:
+                tools = [{"type": "function", "function": self.functions}]
+            elif isinstance(self.functions, list):
+                tools = [{"type": "function", "function": f} for f in self.functions]
 
-    def on_tool_call(self, call_info):
-        """收到服务端 function_call 触发：执行本地查询，构造第二轮消息。"""
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://schoolhumanpet.app",
+            "X-Title": "SchoolHumanPet"
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 4096,
+            "stream": True
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        chunk_buf = ""
+        tool_calls_buf = []   # 流式收集 tool_calls
+
+        def emit_chunk(text, is_finished=False):
+            self.response_received.emit(text, is_finished)
+
         try:
-            # 解析 call_info，提取 query 参数
-            # 讯飞格式可能是 {"name": "...", "arguments": "{\"query\":\"...\"}"}
-            name = call_info.get("name", "")
-            raw_args = call_info.get("arguments", "{}")
-            if isinstance(raw_args, str):
-                args = json.loads(raw_args)
-            else:
-                args = raw_args
-            query = args.get("query", "")
-
-            print(f"[ToolCall] 函数={name}, 查询={query}")
-            if self.lookup_fn:
-                result = self.lookup_fn(query)
-            else:
-                result = f"未找到角色信息（关键词：{query}）"
-
-            # 构造第二轮消息：把 tool 返回结果追加进去
-            # role 为 tool，代表 tool 函数的返回值
-            tool_msg = {
-                "role": "tool",
-                "content": result
-            }
-            followup_messages = self.messages + [tool_msg]
-
-            # 发起第二轮请求（同一 ws，不重连）
-            spark_api_main(
-                appid=self.appid,
-                api_key=self.api_key,
-                api_secret=self.api_secret,
-                Spark_url=self.spark_url,
-                domain=self.domain,
-                messages=followup_messages,
-                on_response=self.on_response,
-                functions=self.functions   # 第二轮仍声明 functions（可能还有后续调用）
+            r = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers, json=payload, stream=True, timeout=90
             )
         except Exception as e:
-            print(f"[ToolCall] 处理出错: {e}")
-            self.error_occurred.emit(f"工具调用错误: {e}")
+            self.error_occurred.emit(f"请求失败: {e}")
+            return "", [], True
+
+        if r.status_code != 200:
+            err = r.text[:500]
+            print(f"[OpenRouter] HTTP {r.status_code}: {err}")
+            self.error_occurred.emit(f"API Error: {r.status_code}")
+            return "", [], True
+
+        chunk_buf = ""
+        tool_calls_buf = []
+
+        for line in r.iter_lines():
+            if not line:
+                continue
+            line = line.decode('utf-8', errors='ignore')
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str == "[DONE]":
+                break
+            try:
+                obj = json.loads(data_str)
+            except:
+                continue
+            delta = obj.get("choices", [{}])[0].get("delta", {})
+            chunk_text = delta.get("content") or ""
+            if chunk_text:
+                chunk_buf += chunk_text
+                emit_chunk(chunk_text)
+            for tc in (delta.get("tool_calls") or []):
+                fn = tc.get("function", {})
+                idx = tc.get("index", len(tool_calls_buf))
+                while len(tool_calls_buf) <= idx:
+                    tool_calls_buf.append({"name": "", "arguments": ""})
+                if fn.get("name"):
+                    tool_calls_buf[idx]["name"] += fn["name"]
+                if fn.get("arguments"):
+                    tool_calls_buf[idx]["arguments"] += fn["arguments"]
+
+        # 不在此发 finished；run() 在所有轮结束后统一发
+        return chunk_buf, tool_calls_buf, False
 
     def run(self):
-        try:
-            spark_api_main(
-                appid=self.appid,
-                api_key=self.api_key,
-                api_secret=self.api_secret,
-                Spark_url=self.spark_url,
-                domain=self.domain,
-                messages=self.messages,
-                on_response=self.on_response,
-                functions=self.functions,
-                on_tool_call=self.on_tool_call
-            )
-        except Exception as e:
-            self.error_occurred.emit(str(e))
+        content, tool_calls, _ = self._do_round(self.messages)
+        if tool_calls and self.lookup_fn:
+            # 第二轮：执行工具 + 追加 tool 消息
+            for tc in tool_calls:
+                name = tc.get("name", "")
+                raw_args = tc.get("arguments", "{}")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except:
+                    args = {"query": raw_args}
+                query = args.get("query", "")
+                print(f"[ToolCall] 函数={name}, 查询={query}")
+                result = self.lookup_fn(query)
+                tool_msg = {
+                    "role": "tool",
+                    "content": result,
+                    "tool_call_id": f"call_{id(tc)}"
+                }
+                assistant_msg = {"role": "assistant", "content": content}
+                if name:
+                    raw_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+                    assistant_msg["tool_calls"] = [
+                        {"id": f"call_{id(tc)}", "type": "function",
+                         "function": {"name": name, "arguments": raw_str}}
+                    ]
+                followup = self.messages + [assistant_msg, tool_msg]
+                self._do_round(followup)
+        # 所有轮次结束，发 finished 信号（UI 统一在此重置）
+        self.response_received.emit("", True)
 
 
 class ChatDialog(QDialog):
@@ -229,53 +285,51 @@ class ChatDialog(QDialog):
             return None
 
     def load_character_info(self):
+        """从主数据文件查找南大角色（宁瑾诚 / 南京大学），不再依赖旧版拆分的 OC/家族 JSON。"""
         info_path = os.path.join(base_dir, '高校拟人角色.json')
         try:
-            with open(info_path, 'r', encoding='gbk', errors='ignore') as f:
-                raw = f.read()
-                close_idx = raw.find(']')
-                if close_idx != -1:
-                    raw = raw[:close_idx+1]
-                data = json.loads(raw)
-                if data:
-                    # 显式查找南大角色（宁瑾诚），而不是取第一条
-                    char = None
-                    for item in data:
-                        if item.get('姓名') == '宁瑾诚' or item.get('代表高校') == '南京大学':
-                            char = item
-                            break
-                    if char is None:
-                        char = data[0]  # 兜底
-                    character_text = f"""你现在扮演宁瑾诚，南京大学意识体。
-姓名：{char.get('姓名', '')}
-性别：{char.get('性别', '')}
-身高：{char.get('身高', '')}
-生日：{char.get('生日', '')}
-代表高校：{char.get('代表高校', '')}
-地区：{char.get('地区', '')}
-外貌：{char.get('外貌', '')}
-设定：{char.get('设定', '')}"""
-            
-            bg_text = ""
-            try:
-                family_members = []
-                for member in data:
-                    if member.get('姓名') == char.get('姓名'):
-                        continue
-                    status = member.get('存在状态', '')
-                    if status == '存在':
-                        family_members.append(f"{member.get('姓名', '?')}（{member.get('代表高校', '?')}）")
-                if family_members:
-                    bg_text = f"\n\n家族成员（当前存在）：{'、'.join(family_members)}\n\n注意：当提到其他南京高校时，请参考以上背景设定。"
-            except Exception as e:
-                print(f"Failed to load family info: {e}")
+            with open(info_path, 'r', encoding='utf-8', errors='ignore') as f:
+                data = json.load(f)
+            if not data:
+                return ""
 
-            return character_text + bg_text + """
+            # 显式查找南大：按"姓名=宁瑾诚" 或"代表高校=南京大学"
+            char = None
+            for item in data:
+                if item.get('姓名') == '宁瑾诚':
+                    char = item
+                    break
+            if char is None:
+                for item in data:
+                    if item.get('代表高校') == '南京大学':
+                        char = item
+                        break
+            if char is None:
+                print("Character not found: 宁瑾诚 / 南京大学")
+                return ""
 
-【工具使用规则】
-当用户提到你认识的其他高校（如东南大学、南师大、南农、河海、南航、南理、南邮等）或提到你家族中的具体成员（如瑾韵、瑜敏、焕秾、焕郁、沧淼、灼毅、霁明等），你应主动调用工具 get_school_persona(query) 查询对方的详细设定，再以宁瑾诚（南大）的口吻回应，始终保持你是南大的身份，不要切换身份。
+            # 收集家族成员（南大之外"存在状态=存在"的所有高校）
+            family_members = []
+            for member in data:
+                if member is char:
+                    continue
+                if member.get('存在状态') == '存在':
+                    family_members.append(f"{member.get('姓名','')}（{member.get('代表高校','')}）")
 
-请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"""
+            character_text = f"""你现在扮演宁瑾诚，南京大学意识体。
+姓名：{char.get('姓名','')}
+性别：{char.get('性别','')}
+身高：{char.get('身高','')}
+生日：{char.get('生日','')}
+代表高校：{char.get('代表高校','')}
+地区：{char.get('地区','')}
+外貌：{char.get('外貌','')}
+性格：温柔细心但有些腹黑，是弟妹控，关心同在南京的弟弟妹妹们。喜欢猫猫，喜欢rua猫，也喜欢被猫rua。喜欢甜食，是那种学术会议上盯着茶歇狂吃的类型。对天文地理和古籍感兴趣，也很会研究计算机。心思比较敏感，很容易被勾起对金大央大的回忆。很恋家。
+设定：{char.get('设定','')}"""
+
+            bg_text = f"\n\n家族成员（当前存在）：{'、'.join(family_members)}\n\n注意：当用户提到其他高校时，请调用 lookup_school_persona 工具查询该角色设定，再以南大的口吻回应。"
+
+            return character_text + bg_text + "\n\n请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"
         except Exception as e:
             print(f"Failed to load character info: {e}")
             return ""
@@ -489,17 +543,28 @@ class ChatDialog(QDialog):
                 "content": msg["content"]
             })
 
-        # 传入方法 B 的函数声明和本地查询函数
-        self.worker = ChatWorker(
-            appid=self.api_config["APPID"],
-            api_key=self.api_config["APIKey"],
-            api_secret=self.api_config["APISecret"],
-            spark_url=self.api_config["Spark_url"],
-            domain=self.api_config["domain"],
-            messages=messages,
-            functions=SCHOOL_PERSONA_TOOL,
-            lookup_fn=lookup_persona
-        )
+        # 使用 OpenRouter（如果配置存在且有效），否则回退到星火
+        openrouter_cfg = self.api_config.get("openrouter") if self.api_config else None
+        if openrouter_cfg and openrouter_cfg.get("api_key"):
+            self.worker = ChatWorker(
+                provider="openrouter",
+                messages=messages,
+                functions=SCHOOL_PERSONA_TOOL,
+                lookup_fn=lookup_persona,
+                api_key=openrouter_cfg["api_key"],
+                model=openrouter_cfg.get("model", "deepseek/deepseek-chat-v3.1:free")
+            )
+        else:
+            self.worker = ChatWorker(
+                provider="spark",
+                messages=messages,
+                functions=SCHOOL_PERSONA_TOOL,
+                lookup_fn=lookup_persona,
+                api_key=self.api_config.get("APIKey"),
+                api_secret=self.api_config.get("APISecret"),
+                spark_url=self.api_config.get("Spark_url"),
+                domain=self.api_config.get("domain")
+            )
         self.worker.response_received.connect(self.on_response)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.finished.connect(self.on_worker_finished)
@@ -514,18 +579,20 @@ class ChatDialog(QDialog):
         self.chat_area.append(msg_html)
 
     def on_response(self, content, finished):
+        if not content and not finished:
+            return
         if self.is_first_response:
             self.current_response = content
-            html_content = markdown.markdown(content)
-            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}')
+            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>')
+            self.chat_area.insertHtml(markdown.markdown(content))
             self.is_first_response = False
         else:
             self.current_response += content
-            html_content = markdown.markdown(self.current_response)
-            pet_html = f'<b><span style="color:#2ECC71">Pet:</span></b><br>{html_content}'
-            self.chat_area.setHtml(self.history_html + pet_html)
+            # 直接 append 当前 chunk，避免重渲染整个历史（防跳动）
+            self.chat_area.insertHtml(markdown.markdown(content))
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
         if finished:
+            # 完成态：只更新历史缓存
             self.history_html += f'<b><span style="color:#2ECC71">Pet:</span></b><br>{markdown.markdown(self.current_response)}<br>'
             self.chat_history.append({"role": "assistant", "content": self.current_response})
             self.save_history()
