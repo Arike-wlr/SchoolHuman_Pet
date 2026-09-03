@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QDesktopWidget, QMenu, QDialog, QTextEdit, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QDesktopWidget, QMenu, QDialog, QTextEdit, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QSystemTrayIcon
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QGuiApplication
@@ -25,6 +25,25 @@ else:
 
 APP_DATA_DIR = os.path.join(exe_dir, 'data')
 os.makedirs(APP_DATA_DIR, exist_ok=True)
+
+# 用户画像加载（记住关键信息）
+def load_user_profile():
+    path = os.path.join(APP_DATA_DIR, "user_profile.json")
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_user_profile(profile):
+    path = os.path.join(APP_DATA_DIR, "user_profile.json")
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(profile, f, ensure_ascii=False, indent=2)
+
+USER_PROFILE = load_user_profile()
+
 
 def migrate_old_records():
     old_history_dir = os.path.join(base_dir, 'customized', 'chat_records')
@@ -53,6 +72,63 @@ from SparkApi2 import main as spark_api_main
 from OpenRouterApi import main as openrouter_main
 from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
 
+
+
+def _update_profile(text):
+    """让 AI 一次小调用判断本轮有哪些值得长期记忆的关键信息（姓名/学校/兴趣/职业等）。"""
+    import requests, re, json
+    api_key = None
+    model = "deepseek/deepseek-chat-v3.1:free"
+    try:
+        cfg_path = os.path.join(base_dir, 'customized', 'api_config.json')
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        if cfg.get('openrouter', {}).get('api_key'):
+            api_key = cfg['openrouter']['api_key']
+            model = cfg['openrouter'].get('model', model)
+    except Exception:
+        pass
+    if not api_key:
+        return
+    current = json.dumps(USER_PROFILE, ensure_ascii=False)
+    prompt = (
+        f"你是一个用户画像提取器。根据最新用户消息和已有画像，"
+        f"判断哪些信息值得长期记忆（姓名、学校、专业、兴趣、性格、宠物、城市、重要事件等）。\n"
+        f"已有画像：{current}\n"
+        f"最新消息：{text}\n"
+        f"只输出 JSON，不要解释，不要 markdown，例如：{{\"name\":\"小明\",\"school\":\"南大\"}}"
+    )
+    try:
+        r = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 200, "temperature": 0},
+            timeout=10
+        )
+        if r.status_code != 200:
+            print(f"[Profile] AI 提取调用失败 {r.status_code}")
+            return
+        out = r.json()["choices"][0]["message"]["content"].strip()
+        out = out.replace("```json", "").replace("```", "").strip()
+        start = out.find("{")
+        end = out.rfind("}")
+        if start >= 0 and end > start:
+            out = out[start:end+1]
+        extracted = json.loads(out) if out.startswith("{") else {}
+        if not extracted:
+            return
+        profile = dict(USER_PROFILE)
+        for k, v in extracted.items():
+            if v is None or v == "" or v == "value":
+                continue
+            profile[str(k)] = str(v)
+        globals()["USER_PROFILE"] = profile
+        save_user_profile(profile)
+        print(f"[Profile] AI 提取并更新: {extracted}")
+    except Exception as e:
+        out_fallback = out if 'out' in dir() else 'N/A'
+        print(f"[Profile] 解析失败: {e} | 原始: {out_fallback}")
 
 class ChatWorker(QThread):
     """两轮对话 Worker（OpenRouter / Spark 双支持）。
@@ -418,7 +494,7 @@ class ChatDialog(QDialog):
 性格：温柔细心但有些腹黑，是弟妹控，关心同在南京的弟弟妹妹们。喜欢猫猫，喜欢rua猫，也喜欢被猫rua。喜欢甜食，是那种学术会议上盯着茶歇狂吃的类型。对天文地理和古籍感兴趣，也很会研究计算机。心思比较敏感，很容易被勾起对金大央大的回忆。很恋家。
 设定：{char.get('设定','')}"""
 
-            return character_text + bg_text + "\n\n请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"
+            return character_text + bg_text + profile_str + "\n\n请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"
         except Exception as e:
             print(f"Failed to load character info: {e}")
             return ""
@@ -736,7 +812,7 @@ class ChatDialog(QDialog):
             try:
                 # 用 QPixmap 压缩（不装 Pillow）
                 pix = QPixmap(self.pending_image_path)
-                pix = pix.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pix = pix.scaled(500, 500, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 compressed_path = os.path.join(APP_DATA_DIR, "_compressed.png")
                 pix.save(compressed_path, "PNG")
                 with open(compressed_path, 'rb') as f:
@@ -816,6 +892,13 @@ class ChatDialog(QDialog):
             self.history_html += f'<b><span style="color:#2ECC71">{self.pet_nickname}:</span></b><br/>{markdown.markdown(self.current_response)}<br/><br/>'
             self.chat_history.append({"role": "assistant", "content": self.current_response})
             self.save_history()
+            # 提取用户关键信息（从最后一条 user 消息中）
+            for msg in reversed(self.chat_history[:-1]):
+                if msg.get("role") == "user":
+                    raw = msg.get("content", "")
+                    text = raw if isinstance(raw, str) else raw.get("text", "")
+                    _update_profile(text)
+                    break
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
             self.new_conv_button.setEnabled(True)
