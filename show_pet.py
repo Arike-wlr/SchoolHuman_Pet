@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QDesktopWidget, QMenu, QDialog, QTextEdit, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QSystemTrayIcon
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
-from PyQt5.QtGui import QPixmap, QGuiApplication
+from PyQt5.QtGui import QPixmap, QGuiApplication, QIcon
 import base64
 import sys
 import os
@@ -93,7 +93,7 @@ def _update_profile(text):
     """让 AI 一次小调用判断本轮有哪些值得长期记忆的关键信息（姓名/学校/兴趣/职业等）。"""
     import requests, re, json
     api_key = None
-    model = "deepseek/deepseek-chat-v3.1:free"
+    model = "openrouter/free"
     try:
         cfg_path = os.path.join(base_dir, 'customized', 'api_config.json')
         with open(cfg_path, 'r', encoding='utf-8') as f:
@@ -182,7 +182,7 @@ class ChatWorker(QThread):
         """执行一轮请求（OpenRouter）。返回 (content, tool_calls, is_final)。"""
         import requests
         api_key = self.kwargs.get('api_key')
-        model = self.kwargs.get('model', 'deepseek/deepseek-chat-v3.1:free')
+        model = self.kwargs.get('model', 'openrouter/free')
         tools = None
         if self.functions is not None:
             if isinstance(self.functions, dict) and "name" in self.functions:
@@ -889,7 +889,7 @@ class ChatDialog(QDialog):
                 functions=SCHOOL_PERSONA_TOOL,
                 lookup_fn=lookup_persona,
                 api_key=openrouter_cfg["api_key"],
-                model=openrouter_cfg.get("model", "deepseek/deepseek-chat-v3.1:free")
+                model=openrouter_cfg.get("model", "openrouter/free")
             )
         else:
             self.worker = ChatWorker(
@@ -1200,6 +1200,8 @@ class DesktopPet(QWidget):
         feed_action = menu.addAction("Feed")
         chat_action = menu.addAction("Chat")
         reminder_action = menu.addAction("设置提醒")
+        close_action = menu.addAction("关闭")
+        quit_action = menu.addAction("退出")
         action = menu.exec_(pos)
         if action == feed_action:
             self.feed()
@@ -1207,6 +1209,13 @@ class DesktopPet(QWidget):
             self.open_chat()
         elif action == reminder_action:
             self.setup_reminders()
+        elif action == close_action:
+            self.hide()
+            if hasattr(self, 'tray_icon') and self.tray_icon:
+                self.tray_icon.show()
+        elif action == quit_action:
+            import sys
+            sys.exit(0)
 
     def setup_reminders(self):
         from PyQt5.QtWidgets import QInputDialog
@@ -1343,6 +1352,20 @@ class BubbleDialog(QLabel):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     pet = DesktopPet("Arike")
+
+    # 创建系统托盘
+    tray_icon = QSystemTrayIcon(QIcon(QPixmap(os.path.join(pet.pet_folder, 'pet.png'))), app)
+    tray_icon.setToolTip("南大宁瑾诚")
+    tray_menu = QMenu()
+    show_action = tray_menu.addAction("显示南大")
+    quit_action = tray_menu.addAction("退出")
+    show_action.triggered.connect(lambda: (pet.show(), pet.activateWindow()))
+    quit_action.triggered.connect(app.quit)
+    tray_icon.setContextMenu(tray_menu)
+    tray_icon.activated.connect(lambda r: r == QSystemTrayIcon.DoubleClick and (pet.show(), pet.activateWindow()))
+    tray_icon.show()
+    pet.tray_icon = tray_icon
+
     pet.show()
     pet.greet()
     sys.exit(app.exec_())

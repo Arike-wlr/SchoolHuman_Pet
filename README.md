@@ -2,7 +2,7 @@
 
 桌面宠物应用。基于 PyQt5，支持拖拽、投喂、聊天。
 
-运行时调用：**OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`，模型 `deepseek/deepseek-chat-v3.1:free`)。
+运行时调用：**OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`，模型 `openrouter/free`)。
 
 星火 WebSocket 适配 (`customized/SparkApi2.py`) 保留备用。
 
