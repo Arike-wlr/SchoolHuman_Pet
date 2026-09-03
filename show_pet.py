@@ -9,6 +9,7 @@ from datetime import datetime
 import random
 import json
 import markdown
+import time
 
 # Method B 工具调用
 from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
@@ -108,19 +109,43 @@ class ChatWorker(QThread):
         def emit_chunk(text, is_finished=False):
             self.response_received.emit(text, is_finished)
 
-        try:
-            r = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers, json=payload, stream=True, timeout=90
-            )
-        except Exception as e:
-            self.error_occurred.emit(f"请求失败: {e}")
-            return "", [], True
+        max_retries = 2
+        retry_delay = 3  # 秒
+        for attempt in range(max_retries + 1):
+            try:
+                r = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers, json=payload, stream=True, timeout=90
+                )
+            except Exception as e:
+                if attempt < max_retries:
+                    print(f"[OpenRouter] 连接异常，第 {attempt + 1} 次重试，等待 {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                self.error_occurred.emit(f"请求失败: {e}")
+                return "", [], True
 
-        if r.status_code != 200:
-            err = r.text[:500]
-            print(f"[OpenRouter] HTTP {r.status_code}: {err}")
-            self.error_occurred.emit(f"API Error: {r.status_code}")
+            if r.status_code == 200:
+                break  # 正常，退出重试循环
+
+            if r.status_code == 429:
+                err = r.text[:500]
+                print(f"[OpenRouter] HTTP 429 限流，第 {attempt + 1} 次重试，等待 {retry_delay}s... 错误: {err}")
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    self.error_occurred.emit(f"API Error: 429 限流，已重试 {max_retries} 次")
+                    return "", [], True
+            else:
+                err = r.text[:500]
+                print(f"[OpenRouter] HTTP {r.status_code}: {err}")
+                self.error_occurred.emit(f"API Error: {r.status_code}")
+                return "", [], True
+        else:
+            # 所有重试耗尽仍未成功（理论上不会走到这，因为非 200 会直接 return）
             return "", [], True
 
         chunk_buf = ""
@@ -308,13 +333,11 @@ class ChatDialog(QDialog):
                 print("Character not found: 宁瑾诚 / 南京大学")
                 return ""
 
-            # 收集家族成员（南大之外"存在状态=存在"的所有高校）
-            family_members = []
-            for member in data:
-                if member is char:
-                    continue
-                if member.get('存在状态') == '存在':
-                    family_members.append(f"{member.get('姓名','')}（{member.get('代表高校','')}）")
+            # 不再把全部高校都列进 system prompt（防模型把全部高校当成南大家族）
+            # 仅在 tool 调用时按需查询
+            bg_text = ("\n\n注意：你是南大宁瑾诚。用户提到其他高校（清华、北大、交大、复旦等）时，"
+                       "**不要直接编造其设定**，应先调用 lookup_school_persona 工具查询实际数据，"
+                       "再以南大口吻回应。自己是独立的南大，不是所有高校的家长。")
 
             character_text = f"""你现在扮演宁瑾诚，南京大学意识体。
 姓名：{char.get('姓名','')}
@@ -326,8 +349,6 @@ class ChatDialog(QDialog):
 外貌：{char.get('外貌','')}
 性格：温柔细心但有些腹黑，是弟妹控，关心同在南京的弟弟妹妹们。喜欢猫猫，喜欢rua猫，也喜欢被猫rua。喜欢甜食，是那种学术会议上盯着茶歇狂吃的类型。对天文地理和古籍感兴趣，也很会研究计算机。心思比较敏感，很容易被勾起对金大央大的回忆。很恋家。
 设定：{char.get('设定','')}"""
-
-            bg_text = f"\n\n家族成员（当前存在）：{'、'.join(family_members)}\n\n注意：当用户提到其他高校时，请调用 lookup_school_persona 工具查询该角色设定，再以南大的口吻回应。"
 
             return character_text + bg_text + "\n\n请用宁瑾诚的口吻和用户聊天，保持温柔、亲切的语气。"
         except Exception as e:
