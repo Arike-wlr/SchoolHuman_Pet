@@ -147,12 +147,8 @@ buildozer android debug deploy
 
 `pet.spec` 已包含 `pet/`、`高校拟人角色.json`、`userinfo.txt`、`customized/` 资源。
 
-## 家族成员（中央家族）
-
-南大宁瑾诚 + 金大宁瑾凌、央大宁瑾泱、东南宁瑾韵（你二弟）、南师大宁瑜敏（你三妹）、南农宁焕秾（你四妹）、南林宁焕郁（你五弟）、河海宁沧淼（你六妹）、西工大、南工大宁灼毅（你八弟）、南信大宁霁明（你九妹）。
-
 ## 注意事项
 
 - 不要把 `.env` 提交到 git（已在 `.gitignore`）
 - 心知 `SFVS0KwOgh7YIp_Gt` 是个人免费额度，**严禁外传**
-- OpenRouter `deepseek/deepseek-chat-v3.1:free` 偶发 429，代码已自动重试
+- OpenRouter `openrouter/free` 偶发 429，代码已自动重试

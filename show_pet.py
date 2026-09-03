@@ -1355,19 +1355,28 @@ class BubbleDialog(QLabel):
     def __init__(self, parent=None, text="Hello!"):
         super().__init__(parent)
         self.setText(text)
+        self.setWordWrap(True)
         self.setStyleSheet("""
             background-color: white;
             border: 5px solid #0078D7;
             border-radius: 10px;
             padding: 10px;
             margin: 15px;
-            font: bold 36px;
+            font: bold 22px;
         """)
         self.setAlignment(Qt.AlignCenter)
+        self.setWordWrap(True)
         self.adjustSize()
         self.adjustSize()
         self.resize(self.width() + 200, self.height() + 50)
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setWordWrap(True)
+        self.adjustSize()
+        self.adjustSize()
+        self.resize(self.width() + 200, self.height() + 50)
 
     def move_to(self, pos: QPoint):
         self.move(pos.x() + 50, pos.y() - self.height())
