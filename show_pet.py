@@ -13,7 +13,17 @@ import json
 import markdown
 import time
 import urllib.request
-WEATHER_API_KEY = "SFVS0KwOgh7YIp_Gt"
+# API Key 从环境或 .env 读取，避免硬编码
+_WEATHER_KEY = os.getenv("WEATHER_API_KEY") or ""
+if not _WEATHER_KEY:
+    try:
+        with open(os.path.join(base_dir, '.env'), 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('WEATHER_API_KEY='):
+                    _WEATHER_KEY = line.strip().split('=', 1)[1].strip()
+                    break
+    except Exception:
+        pass
 
 # Method B 工具调用
 from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
@@ -50,7 +60,10 @@ USER_PROFILE = load_user_profile()
 # 天气插件（使用用户提供 KEY）
 def fetch_weather(city="南京"):
     try:
-        url = f"https://api.seniverse.com/v3/weather/now.json?key={WEATHER_API_KEY}&location={city}&language=zh-Hans&unit=c"
+        key = _WEATHER_KEY or ""
+        if not key:
+            return None
+        url = f"https://api.seniverse.com/v3/weather/now.json?key={key}&location={city}&language=zh-Hans&unit=c"
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json.loads(resp.read())
             now = data["results"][0]["now"]
@@ -471,12 +484,23 @@ class ChatDialog(QDialog):
 
     def load_api_config(self):
         config_path = os.path.join(base_dir, 'customized', 'api_config.json')
+        cfg = {}
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                cfg = json.load(f)
         except Exception as e:
             print(f"Failed to load API config: {e}")
-            return None
+
+        # .env 优先（生产环境，敏感 Key 不进源码）
+        def _e(var, fallback=""):
+            return os.getenv(var) or fallback
+        cfg["APPID"]     = _e("SPARK_APPID",     cfg.get("APPID", ""))
+        cfg["APIKey"]    = _e("SPARK_API_KEY",   cfg.get("APIKey", ""))
+        cfg["APISecret"] = _e("SPARK_API_SECRET", cfg.get("APISecret", ""))
+        or_block = cfg.get("openrouter", {})
+        or_block["api_key"] = _e("OPENROUTER_API_KEY", or_block.get("api_key", ""))
+        cfg["openrouter"] = or_block
+        return cfg
 
     def load_character_info(self):
         """从主数据文件查找南大角色（宁瑾诚 / 南京大学），不再依赖旧版拆分的 OC/家族 JSON。"""
