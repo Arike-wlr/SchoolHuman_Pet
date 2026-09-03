@@ -12,6 +12,8 @@ import random
 import json
 import markdown
 import time
+import urllib.request
+WEATHER_API_KEY = "SFVS0KwOgh7YIp_Gt"
 
 # Method B 工具调用
 from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
@@ -43,6 +45,19 @@ def save_user_profile(profile):
         json.dump(profile, f, ensure_ascii=False, indent=2)
 
 USER_PROFILE = load_user_profile()
+
+
+# 天气插件（使用用户提供 KEY）
+def fetch_weather(city="南京"):
+    try:
+        url = f"https://api.seniverse.com/v3/weather/now.json?key={WEATHER_API_KEY}&location={city}&language=zh-Hans&unit=c"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+            now = data["results"][0]["now"]
+            return f"{city} {now['temperature']}°C {now['text']}"
+    except Exception:
+        return None
+
 
 
 def migrate_old_records():
@@ -307,7 +322,7 @@ class ChatDialog(QDialog):
     def __init__(self, parent=None, username=""):
         super().__init__(parent)
         self.username = username
-        self.setWindowTitle("Pet Chat")
+        self.setWindowTitle("宠物对话")
         self.setMinimumSize(500, 400)
 
         self.api_config = self.load_api_config()
@@ -320,7 +335,7 @@ class ChatDialog(QDialog):
         self.layout = QVBoxLayout(self)
 
         self.button_layout = QHBoxLayout()
-        self.new_conv_button = QPushButton("New Conversation", self)
+        self.new_conv_button = QPushButton("新对话", self)
         self.new_conv_button.setStyleSheet("""
             QPushButton {
                 background-color: #ff6b6b;
@@ -373,7 +388,7 @@ class ChatDialog(QDialog):
 
         self.input_layout = QHBoxLayout()
         self.input_field = QLineEdit(self)
-        self.input_field.setPlaceholderText("Type a message...")
+        self.input_field.setPlaceholderText("输入消息...")
         self.input_field.setMaxLength(500)
         self.input_field.setStyleSheet("""
             QLineEdit {
@@ -386,7 +401,7 @@ class ChatDialog(QDialog):
         self.input_field.returnPressed.connect(self.send_message)
         self.input_layout.addWidget(self.input_field)
 
-        self.send_button = QPushButton("Send", self)
+        self.send_button = QPushButton("发送", self)
         self.send_button.setStyleSheet("""
             QPushButton {
                 background-color: #0078D7;
@@ -691,7 +706,7 @@ class ChatDialog(QDialog):
         self.history_file = self.create_new_history_file()
         self.chat_history = []
         self.chat_area.clear()
-        self.append_message("System", "New conversation started.", is_user=False)
+        self.append_message("System", "新对话已开始。", is_user=False)
 
     def closeEvent(self, event):
         self.save_history()
@@ -823,7 +838,7 @@ class ChatDialog(QDialog):
         self.is_first_response = True
 
         if not self.api_config:
-            self.append_message("System", "API configuration not found!", is_user=False)
+            self.append_message("System", "API 配置未找到！", is_user=False)
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
             return
@@ -931,7 +946,7 @@ class ChatDialog(QDialog):
             self.input_field.setFocus()
 
     def on_error(self, error_msg):
-        self.append_message("System", f"Error: {error_msg}", is_user=False)
+        self.append_message("System", f"错误：{error_msg}", is_user=False)
         self.send_button.setEnabled(True)
         self.input_field.setEnabled(True)
         self.new_conv_button.setEnabled(True)
@@ -979,6 +994,14 @@ class DesktopPet(QWidget):
         self.greet_timer = QTimer(self)
         self.greet_timer.timeout.connect(self.check_time_greet)
         self.greet_timer.start(60000)
+        # 定时提醒（每分钟检查一次）
+        self.reminder_timer = QTimer(self)
+        self.reminder_timer.timeout.connect(self._do_reminder)
+        self.reminder_timer.start(60000)
+        # 每整点喝水提醒（防重：minute==0 时每小时弹一次）
+        self._last_water_hour = -1
+        # 自定义提醒：用户自己设置时间
+        self.custom_reminders = self._load_custom_reminders()
 
         self.right_dragged = False
 
@@ -1022,6 +1045,28 @@ class DesktopPet(QWidget):
         self.label.repaint()
         self.update()
         return True
+
+    def _load_custom_reminders(self):
+        path = os.path.join(APP_DATA_DIR, "custom_reminders.json")
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        # 默认：用户可修改这三个
+        return [
+            {"hour": 12, "minute": 30, "msg": "学习提醒～休息一下，宁瑾诚在这里等你～"},
+            {"hour": 15, "minute": 0, "msg": "休息提醒～午后小憩，精神更饱满！"},
+        ]
+
+    def _save_custom_reminders(self):
+        try:
+            path = os.path.join(APP_DATA_DIR, "custom_reminders.json")
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self.custom_reminders, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def greet(self):
         hello_path = os.path.join(self.pet_folder, "hello.png")
@@ -1154,11 +1199,62 @@ class DesktopPet(QWidget):
         menu = QMenu(self)
         feed_action = menu.addAction("Feed")
         chat_action = menu.addAction("Chat")
+        reminder_action = menu.addAction("设置提醒")
         action = menu.exec_(pos)
         if action == feed_action:
             self.feed()
         elif action == chat_action:
             self.open_chat()
+        elif action == reminder_action:
+            self.setup_reminders()
+
+    def setup_reminders(self):
+        from PyQt5.QtWidgets import QInputDialog
+        time_str, ok = QInputDialog.getText(
+            self, "设置提醒", "输入时间（HH:MM）和内容，用 | 分隔\n例如：12:30|学习时间到"
+        )
+        if not ok or not time_str.strip():
+            return
+        try:
+            parts = time_str.split("|", 1)
+            hm = parts[0].strip()
+            msg = parts[1].strip() if len(parts) > 1 else "该做点什么了～"
+            hour, minute = map(int, hm.split(":"))
+            if not (0 <= hour < 24 and 0 <= minute < 60):
+                raise ValueError
+            self.custom_reminders.append({"hour": hour, "minute": minute, "msg": msg})
+            self._save_custom_reminders()
+            self.bubble.setText(f"已设置提醒 {hm}：{msg}")
+            self.bubble.move_to(self.pos())
+            self.bubble.show()
+            QTimer.singleShot(3000, self.bubble.hide)
+        except Exception:
+            self.bubble.setText(f"格式错误：{time_str}（应为 HH:MM|内容）")
+            self.bubble.move_to(self.pos())
+            self.bubble.show()
+            QTimer.singleShot(3000, self.bubble.hide)
+
+    def _do_reminder(self):
+        now = datetime.now()
+        # 1) 每整点喝水提醒（hourly on the hour）
+        if now.minute == 0 and now.hour != self._last_water_hour and 7 <= now.hour <= 22:
+            self._last_water_hour = now.hour
+            self.bubble.setText(f"{self.username}，整点到啦～记得喝水哦！")
+            self.bubble.move_to(self.pos())
+            self.bubble.show()
+            QTimer.singleShot(5000, self.bubble.hide)
+            return
+        # 2) 自定义提醒（用户设置的）
+        for item in self.custom_reminders:
+            h, m, msg = item["hour"], item["minute"], item["msg"]
+            if now.hour == h and now.minute == m and now.hour != getattr(self, "_last_custom_hour", {}).get(h * 60 + m, -1):
+                self._last_custom_hour = getattr(self, "_last_custom_hour", {})
+                self._last_custom_hour[h * 60 + m] = now.hour
+                self.bubble.setText(msg)
+                self.bubble.move_to(self.pos())
+                self.bubble.show()
+                QTimer.singleShot(5000, self.bubble.hide)
+                break
 
     def check_time_greet(self):
         now = datetime.now()
