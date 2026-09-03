@@ -13,17 +13,26 @@ import json
 import markdown
 import time
 import urllib.request
-# API Key 从环境或 .env 读取，避免硬编码
-_WEATHER_KEY = os.getenv("WEATHER_API_KEY") or ""
-if not _WEATHER_KEY:
-    try:
-        with open(os.path.join(base_dir, '.env'), 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.startswith('WEATHER_API_KEY='):
-                    _WEATHER_KEY = line.strip().split('=', 1)[1].strip()
-                    break
-    except Exception:
-        pass
+
+# 加载 .env（最小实现：不依赖 python-dotenv）
+def _load_env_file():
+    env_path = os.path.join(base_dir if 'base_dir' in dir() else os.path.dirname(os.path.abspath(__file__)), '.env')
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    k, v = k.strip(), v.strip().strip('"').strip("'")
+                    os.environ.setdefault(k, v)
+        except Exception:
+            pass
+
+_load_env_file()
+
+_WEATHER_KEY = os.getenv("WEATHER_API_KEY", "")
 
 # Method B 工具调用
 from method_b_tool import SCHOOL_PERSONA_TOOL, lookup_persona
