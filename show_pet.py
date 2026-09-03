@@ -1,6 +1,8 @@
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QDesktopWidget, QMenu, QDialog, QTextEdit, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QDesktopWidget, QMenu, QDialog, QTextEdit, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap, QGuiApplication
+import base64
 import sys
 import os
 import keyboard
@@ -226,6 +228,7 @@ class ChatDialog(QDialog):
         os.makedirs(self.history_dir, exist_ok=True)
         self.history_file = self.get_latest_history_file()
         self.character_info = self.load_character_info()
+        self.pet_nickname = self.load_pet_nickname()  # 默认 "宁瑾诚"
 
         self.layout = QVBoxLayout(self)
 
@@ -246,6 +249,25 @@ class ChatDialog(QDialog):
         """)
         self.new_conv_button.clicked.connect(self.new_conversation)
         self.button_layout.addWidget(self.new_conv_button)
+
+        # 重命名按钮：给南大改网名/昵称
+        self.rename_button = QPushButton("给南大改昵称", self)
+        self.rename_button.setStyleSheet("""
+            QPushButton {
+                background-color: #9b59b6;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 6px 15px;
+                font: bold 12px Arial;
+            }
+            QPushButton:hover {
+                background-color: #8e44ad;
+            }
+        """)
+        self.rename_button.clicked.connect(self.rename_pet)
+        self.button_layout.addWidget(self.rename_button)
+
         self.button_layout.addStretch()
         self.layout.addLayout(self.button_layout)
 
@@ -265,6 +287,7 @@ class ChatDialog(QDialog):
         self.input_layout = QHBoxLayout()
         self.input_field = QLineEdit(self)
         self.input_field.setPlaceholderText("Type a message...")
+        self.input_field.setMaxLength(500)
         self.input_field.setStyleSheet("""
             QLineEdit {
                 border: 2px solid #0078D7;
@@ -293,12 +316,56 @@ class ChatDialog(QDialog):
         self.send_button.clicked.connect(self.send_message)
         self.input_layout.addWidget(self.send_button)
 
+        # 图片按钮：三种方式都可以触发（点击 / 拖拽 / Ctrl+V）
+        self.img_button = QPushButton("📷 看图", self)
+        self.img_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e67e22;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 12px;
+                font: bold 12px Arial;
+            }
+            QPushButton:hover {
+                background-color: #d35400;
+            }
+        """)
+        self.img_button.clicked.connect(self.send_image_from_file)
+        self.input_layout.addWidget(self.img_button)
+
         self.layout.addLayout(self.input_layout)
+
+        # 图片预览（待发送）— 显示在 chat_area 与 input 之间
+        self.preview_label = QLabel(self)
+        self.preview_label.setStyleSheet("""
+            QLabel {
+                background-color: #fff8dc;
+                border: 1px dashed #999;
+                border-radius: 5px;
+                padding: 5px;
+            }
+        """)
+        self.preview_label.setMaximumHeight(100)
+        self.preview_label.setAlignment(Qt.AlignLeft)
+        self.preview_label.setText("")
+        self.preview_label.setVisible(False)
+        self.layout.addWidget(self.preview_label)
 
         self.chat_history = []
         self.is_first_response = False
         self.history_html = ""
+        self.pending_image_path = None   # 待发送的图片路径
+        self.pending_image_html = ""     # 待发送图片的预览缩略图 HTML
+        self.image_sent_in_turn = False  # 本轮（最近一次 user 消息起）是否已发过图
         self.load_history()
+
+        # 启用拖放到 chat_area
+        self.chat_area.setAcceptDrops(True)
+        self.chat_area.setMinimumHeight(60)
+
+        # Ctrl+V 粘贴截图监听
+        self.key_press_count = 0
 
     def load_api_config(self):
         config_path = os.path.join(base_dir, 'customized', 'api_config.json')
@@ -402,10 +469,106 @@ class ChatDialog(QDialog):
                     self.chat_history = json.load(f)
                 for msg in self.chat_history:
                     is_user = (msg["role"] == "user")
-                    self.append_message(self.username if is_user else "Pet", msg["content"], is_user)
+                    content = msg.get("content", "")
+                    # 兼容：新格式是 dict {"text":..., "image_path":...}，老格式是纯 str
+                    if isinstance(content, dict):
+                        img_path = content.get("image_path") if is_user else None
+                        text = content.get("text", "")
+                    else:
+                        img_path = None
+                        text = content
+                    if is_user and img_path:
+                        self.img_button.setVisible(False)   # 本轮已发过图，按钮隐藏
+                    self.append_message(
+                        self.username if is_user else self.pet_nickname,
+                        text,
+                        is_user,
+                        image_path=img_path
+                    )
         except Exception as e:
             print(f"Failed to load chat history: {e}")
             self.chat_history = []
+
+    def load_pet_nickname(self):
+        try:
+            nick_path = os.path.join(APP_DATA_DIR, "pet_nickname.txt")
+            if os.path.exists(nick_path):
+                with open(nick_path, 'r', encoding='utf-8') as f:
+                    return f.read().strip() or "宁瑾诚"
+        except Exception:
+            pass
+        return "宁瑾诚"
+
+    def save_pet_nickname(self, name):
+        try:
+            nick_path = os.path.join(APP_DATA_DIR, "pet_nickname.txt")
+            with open(nick_path, 'w', encoding='utf-8') as f:
+                f.write(name)
+        except Exception as e:
+            print(f"Failed to save nickname: {e}")
+
+    def rename_pet(self):
+        from PyQt5.QtWidgets import QInputDialog
+        new_name, ok = QInputDialog.getText(
+            self, "给南大改网名", "输入新的网名（默认：宁瑾诚）:",
+            text=self.pet_nickname
+        )
+        if ok and new_name and new_name.strip():
+            self.pet_nickname = new_name.strip()
+            self.save_pet_nickname(self.pet_nickname)
+            self.append_message("System", f"已改名为：{self.pet_nickname}", is_user=False)
+
+    # 全局键盘事件：监听 Ctrl+V 粘贴
+    def keyPressEvent(self, event):
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V:
+            if self.send_image():
+                return
+        super().keyPressEvent(event)
+
+    # 图片功能：文件 / 拖拽 / 剪贴板 三合一
+    def send_image_from_file(self, file_path=None):
+        if not file_path:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "选图发给南大", "",
+                "图片 (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"
+            )
+            if not path:
+                return
+            file_path = path
+        self.pending_image_path = file_path
+        # 预览缩略图在预览标签
+        pix = QPixmap(file_path)
+        scaled = pix.scaledToHeight(80, Qt.SmoothTransformation)
+        self.preview_label.setPixmap(scaled)
+        self.preview_label.setVisible(True)
+        # 提示用户点击 Send 发送
+        self.append_message("System", f"已选图：{os.path.basename(file_path)} → 点击 Send 发送 → 南大会看到图片内容", is_user=False)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        for url in urls:
+            path = url.toLocalFile()
+            if path and os.path.isfile(path):
+                ext = os.path.splitext(path)[1].lower()
+                if ext in ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'):
+                    self.send_image_from_file(path)
+                    event.acceptProposedAction()
+                    break
+
+    def send_image(self):
+        # 从剪贴板读取图片（Ctrl+V 最稳方式：直接保存到临时文件再发送）
+        clipboard = QGuiApplication.clipboard()
+        image = clipboard.image()
+        if not image.isNull():
+            temp_path = os.path.join(APP_DATA_DIR, "clipboard_image.png")
+            image.save(temp_path, "PNG")
+            self.send_image_from_file(temp_path)
+            return True
+        return False
 
     def save_history(self):
         try:
@@ -527,11 +690,22 @@ class ChatDialog(QDialog):
 
     def send_message(self):
         text = self.input_field.text().strip()
-        if not text:
+        has_image = self.pending_image_path and os.path.exists(self.pending_image_path)
+        if not text and not has_image:
             return
 
-        self.append_message(self.username, text, is_user=True)
-        self.chat_history.append({"role": "user", "content": text})
+        display_text = text if text else "[看图]"
+        image_path_for_display = self.pending_image_path if has_image else None
+        self.append_message(self.username, display_text, is_user=True, image_path=image_path_for_display)
+        # 保存历史：图片消息用 dict 记录路径，纯文本用 str（兼容老记录）
+        if has_image:
+            history_content = {"text": text or "[看图]", "image_path": self.pending_image_path}
+        else:
+            history_content = text
+        self.chat_history.append({"role": "user", "content": history_content})
+        # ★ 一次对话只发一张：发图后隐藏按钮
+        if has_image:
+            self.img_button.setVisible(False)
         self.save_history()
         self.input_field.clear()
         self.send_button.setEnabled(False)
@@ -545,21 +719,42 @@ class ChatDialog(QDialog):
             self.input_field.setEnabled(True)
             return
 
+        # 构造消息：支持纯文本 + 图片（多模态）
         messages = []
-
         if self.character_info:
-            # 动态增强 system prompt
-            enhanced_prompt = self.build_enhanced_system_prompt(self.character_info, text)
-            messages.append({
-                "role": "system",
-                "content": enhanced_prompt
-            })
-
+            prompt_suffix = ""
+            if has_image:
+                prompt_suffix = "\n\n【注意】用户发送了一张图片，请仔细描述图片内容并以南大口吻回应。"
+            enhanced_prompt = self.build_enhanced_system_prompt(self.character_info, text) + prompt_suffix
+            messages.append({"role": "system", "content": enhanced_prompt})
         for msg in self.chat_history:
-            messages.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
+            messages.append({"role": msg["role"], "content": msg.get("content", "")})
+
+        # 如果有待发送图片，构造多模态内容
+        user_content = [{"type": "text", "text": text or "请描述这张图片"}]
+        if has_image:
+            try:
+                # 用 QPixmap 压缩（不装 Pillow）
+                pix = QPixmap(self.pending_image_path)
+                pix = pix.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                compressed_path = os.path.join(APP_DATA_DIR, "_compressed.png")
+                pix.save(compressed_path, "PNG")
+                with open(compressed_path, 'rb') as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                mime = "image/png"
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
+                print(f"[Image] 已压缩发送，base64 长度={len(b64)} chars")
+            except Exception as e:
+                print(f"Failed to encode/compress image: {e}")
+
+        # ★ 发送前清空图片 + 预览标签
+        self.pending_image_path = None
+        self.preview_label.setVisible(False)
+        self.preview_label.clear()
+        messages.append({"role": "user", "content": user_content})
 
         # 使用 OpenRouter（如果配置存在且有效），否则回退到星火
         openrouter_cfg = self.api_config.get("openrouter") if self.api_config else None
@@ -588,12 +783,19 @@ class ChatDialog(QDialog):
         self.worker.finished.connect(self.on_worker_finished)
         self.worker.start()
 
-    def append_message(self, sender, content, is_user=False):
+    def append_message(self, sender, content, is_user=False, image_path=None):
         color = "#0078D7" if is_user else "#2ECC71"
-        prefix = "You" if is_user else "Pet"
-        html_content = markdown.markdown(content)
-        msg_html = f'<b><span style="color:{color}">{prefix}:</span></b><br>{html_content}'
-        self.history_html += msg_html + "<br>"
+        prefix = self.username if is_user else self.pet_nickname
+        html_content = markdown.markdown(content) if isinstance(content, str) else content
+        img_tag = ""
+        if image_path and (os.path.isabs(image_path) or image_path.startswith('.')):
+            # 路径存在才显示，否则提示已删
+            if os.path.exists(image_path):
+                img_tag = f'<br/><img src="file:///{image_path.replace("\\", "/")}" width="80" height="60" style="max-width:80px;max-height:60px;border-radius:4px;border:1px solid #ddd;"/>'
+            else:
+                img_tag = '<br/><span style="font-size:11px;color:#999;">[原图已删除]</span>'
+        msg_html = f'<b><span style="color:{color}">{prefix}:</span></b><br/>{html_content}{img_tag}<br/><br/>'
+        self.history_html += msg_html
         self.chat_area.append(msg_html)
 
     def on_response(self, content, finished):
@@ -601,17 +803,17 @@ class ChatDialog(QDialog):
             return
         if self.is_first_response:
             self.current_response = content
-            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">Pet:</span></b><br>')
-            self.chat_area.insertHtml(markdown.markdown(content))
+            self.chat_area.insertHtml(f'<b><span style="color:#2ECC71">{self.pet_nickname}:</span></b><br/>')
+            self.chat_area.insertHtml(f'<p style="margin-top:4px;">{markdown.markdown(content)}</p>')
             self.is_first_response = False
         else:
             self.current_response += content
             # 直接 append 当前 chunk，避免重渲染整个历史（防跳动）
-            self.chat_area.insertHtml(markdown.markdown(content))
+            self.chat_area.insertHtml(f'<p style="margin-top:4px;">{markdown.markdown(content)}</p>')
         self.chat_area.verticalScrollBar().setValue(self.chat_area.verticalScrollBar().maximum())
         if finished:
             # 完成态：只更新历史缓存
-            self.history_html += f'<b><span style="color:#2ECC71">Pet:</span></b><br>{markdown.markdown(self.current_response)}<br>'
+            self.history_html += f'<b><span style="color:#2ECC71">{self.pet_nickname}:</span></b><br/>{markdown.markdown(self.current_response)}<br/><br/>'
             self.chat_history.append({"role": "assistant", "content": self.current_response})
             self.save_history()
             self.send_button.setEnabled(True)
