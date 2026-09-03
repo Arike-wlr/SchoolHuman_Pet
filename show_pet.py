@@ -92,11 +92,11 @@ def _update_profile(text):
         return
     current = json.dumps(USER_PROFILE, ensure_ascii=False)
     prompt = (
-        f"你是一个用户画像提取器。根据最新用户消息和已有画像，"
-        f"判断哪些信息值得长期记忆（姓名、学校、专业、兴趣、性格、宠物、城市、重要事件等）。\n"
+        f"你是一个用户画像提取器。根据以下全部用户对话内容和已有画像，判断有哪些值得长期记忆的信息（姓名、学校、专业、兴趣、性格、宠物、城市、重要事件等）。\n"
+        f"如果没有任何有用的新信息，请直接返回一个汉字：无。\n"
+        f"只有有用信息时才输出 JSON，例如：{{\"name\":\"小明\",\"interests\":\"喜欢猫\"}}。\n"
         f"已有画像：{current}\n"
-        f"最新消息：{text}\n"
-        f"只输出 JSON，不要解释，不要 markdown，例如：{{\"name\":\"小明\",\"school\":\"南大\"}}"
+        f"用户对话内容（全部）：{text}\n"
     )
     try:
         r = requests.post(
@@ -111,24 +111,35 @@ def _update_profile(text):
             return
         out = r.json()["choices"][0]["message"]["content"].strip()
         out = out.replace("```json", "").replace("```", "").strip()
+        # 如果 AI 说"无"（没有有用信息），直接跳过保存
+        if out == "无" or out == "无。" or out == "无关键信息" or out.startswith("无，"):
+            print(f"[Profile] AI 判断：无有用信息，跳过保存。")
+            return
         start = out.find("{")
         end = out.rfind("}")
         if start >= 0 and end > start:
             out = out[start:end+1]
         extracted = json.loads(out) if out.startswith("{") else {}
         if not extracted:
+            print(f"[Profile] 无有效 JSON 解析结果，跳过。原始：{out}")
+            return
+        # 过滤掉 AI 返回的"无"占位值
+        cleaned = {}
+        for k, v in extracted.items():
+            if v is None or str(v).strip() in ("", "无", "无。", "无关键信息", "value"):
+                continue
+            cleaned[str(k)] = str(v)
+        if not cleaned:
+            print(f"[Profile] 提取内容全为无效占位，跳过。")
             return
         profile = dict(USER_PROFILE)
-        for k, v in extracted.items():
-            if v is None or v == "" or v == "value":
-                continue
+        for k, v in cleaned.items():
             profile[str(k)] = str(v)
         globals()["USER_PROFILE"] = profile
         save_user_profile(profile)
-        print(f"[Profile] AI 提取并更新: {extracted}")
+        print(f"[Profile] 开新对话总结: {cleaned}")
     except Exception as e:
         out_fallback = out if 'out' in dir() else 'N/A'
-        print(f"[Profile] 解析失败: {e} | 原始: {out_fallback}")
 
 class ChatWorker(QThread):
     """两轮对话 Worker（OpenRouter / Spark 双支持）。
@@ -596,6 +607,10 @@ class ChatDialog(QDialog):
 
     # 全局键盘事件：监听 Ctrl+V 粘贴
     def keyPressEvent(self, event):
+        # Enter 只用于发送，不会跳出选图弹窗
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            self.send_message()
+            return
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V:
             if self.send_image():
                 return
@@ -654,9 +669,27 @@ class ChatDialog(QDialog):
             print(f"Failed to save chat history: {e}")
 
     def new_conversation(self):
+        # ★ 开新对话前：总结整段历史中的所有 user 消息来提取用户画像
+        try:
+            all_user_text = []
+            for msg in self.chat_history:
+                if msg.get("role") == "user":
+                    raw = msg.get("content", "")
+                    text = raw if isinstance(raw, str) else raw.get("text", "")
+                    if text and text.strip():
+                        all_user_text.append(text.strip())
+            combined = "\n".join(all_user_text).strip()
+            if combined:
+                _update_profile(combined)
+        except Exception as e:
+            print(f"[Profile] 开新会话时总结失败（无关键信息也正常）: {e}")
+        # 保存旧历史后再新建
+        try:
+            self.save_history()
+        except Exception:
+            pass
         self.history_file = self.create_new_history_file()
         self.chat_history = []
-        self.save_history()
         self.chat_area.clear()
         self.append_message("System", "New conversation started.", is_user=False)
 
@@ -892,13 +925,6 @@ class ChatDialog(QDialog):
             self.history_html += f'<b><span style="color:#2ECC71">{self.pet_nickname}:</span></b><br/>{markdown.markdown(self.current_response)}<br/><br/>'
             self.chat_history.append({"role": "assistant", "content": self.current_response})
             self.save_history()
-            # 提取用户关键信息（从最后一条 user 消息中）
-            for msg in reversed(self.chat_history[:-1]):
-                if msg.get("role") == "user":
-                    raw = msg.get("content", "")
-                    text = raw if isinstance(raw, str) else raw.get("text", "")
-                    _update_profile(text)
-                    break
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
             self.new_conv_button.setEnabled(True)
